@@ -4,6 +4,7 @@
 #include "input/emulated/ProController.h"
 #include "input/emulated/ClassicController.h"
 #include "input/emulated/WiimoteController.h"
+#include "input/emulated/BalanceBoardController.h"
 
 #include "input/api/Keyboard/KeyboardController.h"
 #include "input/api/DSU/DSUController.h"
@@ -127,6 +128,8 @@ ControllerFactory::CreateEmulatedController(size_t player_index, EmulatedControl
 		return std::make_shared<ClassicController>(player_index);
 	case EmulatedController::Type::Wiimote:
 		return std::make_shared<WiimoteController>(player_index);
+	case EmulatedController::Type::BalanceBoard:
+		return std::make_shared<BalanceBoardController>(player_index);
 	default:
 		throw std::runtime_error(fmt::format("unknown emulated controller type: {}", type));
 	}

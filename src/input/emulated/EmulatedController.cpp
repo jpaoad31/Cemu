@@ -14,6 +14,7 @@ std::string_view EmulatedController::type_to_string(Type type)
 	case Pro: return "Wii U Pro Controller";
 	case Classic: return "Wii U Classic Controller";
 	case Wiimote: return "Wiimote";
+	case BalanceBoard: return "Balance Board";
 	}
 
 	throw std::runtime_error(fmt::format("unknown emulated controller: {}", stdx::to_underlying(type)));
@@ -29,6 +30,8 @@ EmulatedController::Type EmulatedController::type_from_string(std::string_view s
 		return Classic;
 	else if (str == "Wiimote")
 		return Wiimote;
+	else if (str == "Balance Board")
+		return BalanceBoard;
 
 	throw std::runtime_error(fmt::format("unknown emulated controller: {}", str));
 }

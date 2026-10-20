@@ -11,6 +11,7 @@ enum WPADDeviceType
 	kWAPDevCore = 0,
 	kWAPDevFreestyle = 1,
 	kWAPDevClassic = 2,
+	kWAPDevBalanceChecker = 3, // Wii Balance Board
 	kWAPDevMPLS = 5,
 	kWAPDevMPLSFreeStyle = 6,
 	kWAPDevMPLSClassic = 7,
@@ -121,6 +122,9 @@ public:
 
 	void KPADRead(KPADStatus_t& status, const BtnRepeat& repeat);
 	virtual bool is_mpls_attached() { return false; }
+
+	// kDataFormat_BALANCE_CHECKER: fills press[], temp and battery (BalanceBoardController)
+	virtual void fill_balance_status(WPADBLStatus_t& status) {}
 
 	enum class ConnectCallbackStatus
 	{

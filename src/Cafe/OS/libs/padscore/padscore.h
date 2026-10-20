@@ -22,6 +22,7 @@ constexpr int kKPADMaxControllers = 7;
 #define WPAD_FMT_CORE				0
 #define WPAD_FMT_CORE_ACC			1
 #define WPAD_FMT_CORE_ACC_DPD		2
+#define WPAD_FMT_BALANCE_CHECKER	12
 
 typedef struct
 {
@@ -101,6 +102,15 @@ union KPADEXStatus_t
 		uint32be trig;
 		uint32be release;
 	}cm;
+	// Balance Board (layout of the Wii SDK's KPAD; Wii U games are not known to read it)
+	struct
+	{
+		float64be tgc_weight;
+		float64be weight[4];
+		float64be weight_ave[4];
+		sint32be weight_err;
+		sint32be tgc_weight_err;
+	}bl;
 	uint8 _padding[0x50];
 };
 

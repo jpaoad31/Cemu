@@ -31,6 +31,10 @@ add_library(CemuInput
 	emulated/VPADController.h
 	emulated/ClassicController.cpp
 	emulated/ClassicController.h
+	emulated/BalanceBoardController.cpp
+	emulated/BalanceBoardController.h
+	emulated/BalanceBoardMath.cpp
+	emulated/BalanceBoardMath.h
 )
 
 set_property(TARGET CemuInput PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

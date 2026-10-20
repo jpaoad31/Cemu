@@ -1,6 +1,7 @@
 #include "input/InputManager.h"
 #include "config/ActiveSettings.h"
 #include "input/ControllerFactory.h"
+#include "input/emulated/BalanceBoardController.h"
 #include <boost/property_tree/ini_parser.hpp>
 #include <pugixml.hpp>
 #include "Cafe/GameProfile/GameProfile.h"
@@ -589,17 +590,50 @@ EmulatedControllerPtr InputManager::set_controller(EmulatedControllerPtr control
 
 		break;
 
-	default:
-		for (auto& pad : m_wpad)
+	case EmulatedController::Type::BalanceBoard:
+	{
+		// The Balance Board always takes WPAD channel 3 ("Wii Remote 4"): Wii Fit U, like the
+		// Wii's WBC library, only looks for the board there. Move a controller that sits there
+		// to the first free channel.
+		auto& board_pad = m_wpad[BalanceBoardController::kWPADChannel];
+		if (board_pad)
 		{
-			if (!pad)
+			for (size_t i = 0; i < m_wpad.size(); ++i)
 			{
-				pad.swap(controller);
+				if (i != BalanceBoardController::kWPADChannel && !m_wpad[i])
+				{
+					m_wpad[i].swap(board_pad);
+					break;
+				}
+			}
+		}
+		if (!board_pad)
+		{
+			cemuLog_log(LogType::InputAPI, "BalanceBoard: controller {} is the Balance Board on WPAD channel {}", controller->player_index() + 1, BalanceBoardController::kWPADChannel);
+			board_pad.swap(controller);
+			return prev_controller;
+		}
+		break;
+	}
+
+	default:
+	{
+		// keep channel 3 free for a Balance Board if one is configured
+		const bool has_board = std::any_of(m_wpad.cbegin(), m_wpad.cend(), [](const auto& p) { return p && p->type() == EmulatedController::Type::BalanceBoard; });
+		for (size_t i = 0; i < m_wpad.size(); ++i)
+		{
+			if (has_board && i == BalanceBoardController::kWPADChannel)
+				continue;
+
+			if (!m_wpad[i])
+			{
+				m_wpad[i].swap(controller);
 				return prev_controller;
 			}
 		}
 
 		break;
+	}
 	}
 	
 	cemu_assert_debug(false);

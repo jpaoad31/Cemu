@@ -31,6 +31,7 @@
 #include "wxgui/input/settings/DefaultControllerSettings.h"
 #include "wxgui/input/panels/ClassicControllerInputPanel.h"
 #include "wxgui/input/panels/WiimoteInputPanel.h"
+#include "wxgui/input/panels/BalanceBoardInputPanel.h"
 #include "wxgui/input/settings/WiimoteControllerSettings.h"
 #include "util/EventService.h"
 
@@ -456,6 +457,9 @@ void InputSettings2::update_state()
 			case EmulatedController::Wiimote:
 				panel = new WiimoteInputPanel(page);
 				break;
+			case EmulatedController::BalanceBoard:
+				panel = new BalanceBoardInputPanel(page);
+				break;
 			default:
 				cemu_assert_debug(false);
 				return;
@@ -781,6 +785,19 @@ void InputSettings2::on_emulated_controller_dropdown(wxCommandEvent& event)
 		emulated_controllers->AppendString(wxString::FromUTF8(EmulatedController::type_to_string(EmulatedController::Type::Pro)));
 		emulated_controllers->AppendString(wxString::FromUTF8(EmulatedController::type_to_string(EmulatedController::Type::Classic)));
 		emulated_controllers->AppendString(wxString::FromUTF8(EmulatedController::type_to_string(EmulatedController::Type::Wiimote)));
+
+		// only one Balance Board (it always uses WPAD channel 3)
+		const auto board_name = wxString::FromUTF8(EmulatedController::type_to_string(EmulatedController::Type::BalanceBoard));
+		bool other_board = false;
+		for (size_t i = 0; i < InputManager::kMaxController; ++i)
+		{
+			if (i == (size_t)m_notebook->GetSelection())
+				continue;
+			if (const auto c = InputManager::instance().get_controller(i); c && c->type() == EmulatedController::Type::BalanceBoard)
+				other_board = true;
+		}
+		if (!other_board || selected_value == board_name)
+			emulated_controllers->AppendString(board_name);
 	}
 
 	emulated_controllers->SetStringSelection(selected_value);

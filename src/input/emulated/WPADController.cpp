@@ -28,6 +28,8 @@ WPADDataFormat WPADController::get_default_data_format() const
 		return kDataFormat_CLASSIC_ACC_DPD;
 	case kWAPDevURCC:
 		return kDataFormat_URCC;
+	case kWAPDevBalanceChecker:
+		return kDataFormat_BALANCE_CHECKER;
 	default:
 		return kDataFormat_CORE;
 	}
@@ -53,7 +55,8 @@ uint32 WPADController::get_emulated_button_flag(WPADDataFormat format, uint32 id
 	
 	case kDataFormat_TRAIN: break;
 	case kDataFormat_GUITAR: break;
-	case kDataFormat_BALANCE_CHECKER: break;
+	case kDataFormat_BALANCE_CHECKER:
+		return static_cast<const EmulatedController*>(this)->get_emulated_button_flag(id); // the device's own (virtual) mapping
 	case kDataFormat_DRUM: break;
 	
 	case kDataFormat_TAIKO: break;
@@ -140,7 +143,9 @@ void WPADController::WPADRead(WPADStatus_t* status)
 	case kDataFormat_BALANCE_CHECKER:
 	{
 		WPADBLStatus_t* ex_status = (WPADBLStatus_t*)status;
-		// TODO
+		memset(ex_status, 0x00, sizeof(*ex_status));
+		ex_status->button = button;
+		fill_balance_status(*ex_status);
 		break;
 	}
 	case kDataFormat_MPLS:
@@ -375,6 +380,9 @@ void WPADController::KPADRead(KPADStatus_t& status, const BtnRepeat& repeat)
 
 		if (HAS_FLAG((uint32)status.ex_status.cl.hold, kCLButton_ZR))
 			status.ex_status.cl.rtrigger = 1.0f;
+		break;
+	case BalanceBoard:
+		// ex_status.bl (weights) is filled in by padscore's WBC HLE
 		break;
 	default:
 		cemu_assert(false);

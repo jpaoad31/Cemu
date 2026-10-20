@@ -29,6 +29,7 @@ public:
 		Pro,
 		Classic,
 		Wiimote,
+		BalanceBoard,
 
 		MAX
 	};
@@ -134,6 +135,7 @@ struct fmt::formatter<EmulatedController::Type> : formatter<string_view> {
 		case EmulatedController::Type::Pro: return formatter<string_view>::format("Wii U Pro Controller", ctx);
 		case EmulatedController::Type::Classic: return formatter<string_view>::format("Wii U Classic Controller Pro", ctx);
 		case EmulatedController::Type::Wiimote: return formatter<string_view>::format("Wiimote", ctx);
+		case EmulatedController::Type::BalanceBoard: return formatter<string_view>::format("Balance Board", ctx);
 		}
 		throw std::invalid_argument(fmt::format("invalid emulated controller type with value {}", stdx::to_underlying(v)));
 	}
