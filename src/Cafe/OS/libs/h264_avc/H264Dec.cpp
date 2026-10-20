@@ -465,7 +465,8 @@ namespace H264
 			if( !session->GetFrameOutputIfReady(decodeResult) )
 				break;
 			// todo - output all frames in a single callback?
-			H264DoFrameOutputCallback(ctx, decodeResult);
+			if (!decodeResult.decodeFailed) // a rejected input has no frame to output
+				H264DoFrameOutputCallback(ctx, decodeResult);
 			ctx->decoderState.numFramesInFlight--;
 		}
 		cemu_assert_debug(ctx->decoderState.numFramesInFlight == 0); // no frames should be in flight anymore. Exact behavior is not well understood but we may have to output dummy frames if necessary
@@ -658,6 +659,7 @@ namespace H264
 				return 0x400; // error (figure out exact error code. Bit 0x80 indicates presence of frame?)
 			}
 		}
+		bool decodeFailed = false;
 		// feed data to backend
 		session->QueueForDecode((uint8*)ctx->BitStream.ptr.GetPtr(), ctx->BitStream.length, ctx->BitStream.timestamp, imageOutput);
 		ctx->decoderState.numFramesInFlight++;
@@ -674,11 +676,21 @@ namespace H264
 				H264DecoderBackend::DecodeResult decodeResult;
 				if( !session->GetFrameOutputIfReady(decodeResult) )
 					continue;
+				if (decodeResult.decodeFailed)
+				{
+					// the decoder rejected this input and produced no frame: report a bad stream instead of
+					// handing the game an untouched (stale) image buffer. Games resync on this (Wii Fit U's
+					// PlayH264 calls H264DECEnd/Begin and seeks to the next IDR on 0x1000000)
+					decodeFailed = true;
+					break;
+				}
 				H264DoFrameOutputCallback(ctx, decodeResult);
 				break;
 			}
 		}
 		_ReleaseDecoderSession(session);
+		if (decodeFailed)
+			return (uint32)H264DEC_STATUS::BAD_STREAM;
 		bt.Stop();
 		double callTime = bt.GetElapsedMilliseconds();
 		cemuLog_log(LogType::H264, "H264Bench | H264DECExecute took {}ms", callTime);
@@ -753,7 +765,46 @@ namespace H264
 			case 1:
 			case 5:
 			{
-				*unitLengthOut = (sint32)((rbspStream.getBasePtr() + rbspStream.getBaseLength()) - data) + startCodeOffset;
+				// A decode unit is a whole picture, which the encoder may have split into several slice NALs.
+				// Feeding each slice as its own picture breaks decoding: the first slice ends early (libavc
+				// ERROR_EOB_TERMINATE, the rest of the picture concealed) and the next one starts a bogus picture
+				// (ERROR_UNAVAIL_MVBUF). Wii Fit U's menu preview videos split some frames into two slices.
+				// Following slice NALs with first_mb_in_slice > 0 continue the same picture, so include them.
+				uint8* unitEnd = rbspStream.getBasePtr() + rbspStream.getBaseLength();
+				while (!nalStream.isEndOfStream())
+				{
+					RBSPInputBitstream nextStream;
+					if (nalStream.getNextRBSP(nextStream, true) == false)
+					{
+						// the next NAL isn't complete in this buffer yet. If it's a continuation slice the
+						// picture isn't complete either: ask for more data, as for an incomplete first slice
+						uint8* bufEnd = data + maxLength;
+						uint8* p = unitEnd;
+						if (bufEnd - p >= 3 && p[0] == 0 && p[1] == 0 && p[2] == 1)
+							p += 3;
+						else if (bufEnd - p >= 4 && p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1)
+							p += 4;
+						else
+							break;
+						if (bufEnd - p < 2)
+							return H264DEC_STATUS::BAD_STREAM;
+						uint8 peekType = p[0] & 0x1f;
+						if (peekType != 1 && peekType != 5)
+							break;
+						RBSPInputBitstream peekStream(p + 1, (uint32)(bufEnd - p - 1));
+						if (peekStream.readUV_E() != 0)
+							return H264DEC_STATUS::BAD_STREAM;
+						break;
+					}
+					uint8 nextHeader = nextStream.readU8();
+					uint8 nextType = nextHeader & 0x1f;
+					if (nextType != 1 && nextType != 5)
+						break;
+					if (nextStream.readUV_E() == 0) // first_mb_in_slice == 0: a new picture
+						break;
+					unitEnd = nextStream.getBasePtr() + nextStream.getBaseLength();
+				}
+				*unitLengthOut = (sint32)(unitEnd - data) + startCodeOffset;
 				return H264DEC_STATUS::SUCCESS;
 			}
 			case 6:

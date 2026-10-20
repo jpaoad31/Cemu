@@ -185,16 +185,39 @@ namespace H264
 			}
 			else if (status != 0)
 			{
-				cemuLog_log(LogType::Force, "H264: Failed to decode frame (error 0x{:08x})", status);
-				decodedSlice.result.hasFrame = false;
-				cemu_assert_unimplemented();
-				return;
+				// Log what libavc reported: the low byte is its internal error, bits 8+ are IVD_ERROR_BITS_T
+				// (bit 8 concealment applied, 10 corrupted data, 11 corrupted header, 14 fatal)
+				const uint8* nal = (const uint8*)decodedSlice.dataToDecode.m_data;
+				std::string nalTypes;
+				for (uint32 i = 0; i + 3 < decodedSlice.dataToDecode.m_length && nalTypes.size() < 48; i++)
+				{
+					if (nal[i] == 0 && nal[i + 1] == 0 && nal[i + 2] == 1)
+						nalTypes += fmt::format("{} ", nal[i + 3] & 0x1F);
+				}
+				cemuLog_log(LogType::Force, "H264: Failed to decode frame (status 0x{:08x} error 0x{:08x} consumed {}/{} bytes, frame decoded {} output {}, NAL types {}, {} frames decoded so far)",
+					status, s_dec_op.u4_error_code, s_dec_op.u4_num_bytes_consumed, decodedSlice.dataToDecode.m_length,
+					s_dec_op.u4_frame_decoded_flag, s_dec_op.u4_output_present, nalTypes, m_numDecodedFrames);
+				if (!s_dec_op.u4_output_present)
+				{
+					// No frame. Still complete the slice: H264DECExecute (non-buffered mode) waits for one result
+					// per input and would otherwise block forever, and the slot would never be freed.
+					// decodeFailed makes H264DECExecute return an error so the game resyncs at the next IDR.
+					std::unique_lock _l(m_decodeQueueMtx);
+					decodedSlice.result.isDecoded = true;
+					decodedSlice.result.hasFrame = false;
+					decodedSlice.result.decodeFailed = true;
+					m_displayQueue.push_back(std::distance(m_decodedSliceArray.data(), &decodedSlice));
+					_l.unlock();
+					coreinit::OSSignalEvent(m_displayQueueEvt);
+					return;
+				}
+				// a recoverable error with a frame output (e.g. concealment applied): use the frame
 			}
 
 			bt.Stop();
 			double decodeTime = bt.GetElapsedMilliseconds();
 
-			cemu_assert(s_dec_op.u4_frame_decoded_flag);
+			cemu_assert(status != 0 || s_dec_op.u4_frame_decoded_flag);
 			cemu_assert_debug(s_dec_op.u4_num_bytes_consumed == decodedSlice.dataToDecode.m_length);
 
 			cemu_assert_debug(m_isBufferedMode || s_dec_op.u4_output_present); // if buffered mode is disabled, then every input should output a frame (except for partial slices?)

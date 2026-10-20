@@ -25,6 +25,7 @@ namespace H264
 		{
 			bool isDecoded{false};
 			bool hasFrame{false}; // set to true if a full frame was successfully decoded
+			bool decodeFailed{false}; // the decoder rejected the input (no frame); H264DECExecute reports an error so the game can resync
 			double timestamp{};
 			void* imageOutput{nullptr};
 			sint32 frameWidth{0};
@@ -72,6 +73,8 @@ namespace H264
 			ds.dataToDecode.m_length = length;
 
 			ds.result.isDecoded = false;
+			ds.result.hasFrame = false;
+			ds.result.decodeFailed = false;
 			ds.result.imageOutput = imagePtr;
 			ds.result.timestamp = timestamp;
 

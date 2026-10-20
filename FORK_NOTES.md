@@ -3,7 +3,10 @@
 This fork supports the Wii Fit U decomp (`~/github/jpaoad31/wii-fit-u`) on macOS
 (Apple Silicon, Metal). Changes go here as the decomp needs them.
 
-## Done (uncommitted until tested)
+## Done
+
+One commit per fix, so upstream candidates can be offered separately.
+Committed: the memory range and the Balance Board (08026ec). Uncommitted until tested: the H264 fixes.
 
 - **`SYSTEM_LIBS` memory range** (0x01000000-0x017FFFFF, readable). Wii Fit U reads past its
   two-entry pointing-device table (`jet::ui::UICore::Read`) into 0x011004xx. That range is mapped
@@ -11,6 +14,13 @@ This fork supports the Wii Fit U decomp (`~/github/jpaoad31/wii-fit-u`) on macOS
 - **Emulated Balance Board:** see `BALANCE_BOARD.md`. The `padscore` WBC/BLC functions, data
   format 12, the controller type, the settings panel, and the mouse fallback for the centre of
   balance.
+- **H264, multi-slice pictures** (`H264Dec.cpp`): a decode unit now runs through every slice of a
+  picture, not just the first. Wii Fit U's videos (all 80 in `content/movie/`) use 3 slices per
+  picture; Cemu assumed one, so libavc got part-pictures: green, concealed middles (0x26e) and bogus
+  new pictures (0x462). Upstream has the same code.
+- **H264, decode errors** (`H264DecBackendAVC.cpp`, `H264DecInternal.h`): a failed frame completes
+  without output and `Execute` returns `BAD_STREAM`, so the game's own resync runs. The game used to
+  hang briefly and show an untouched buffer. The log line now gives libavc's error code.
 
 ## Backlog (later)
 
