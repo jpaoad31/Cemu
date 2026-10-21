@@ -586,6 +586,11 @@ void wxTitleManagerList::OnConvertToCompressedFormat(uint64 titleId, uint64 righ
 	bool r = asyncWorker.get();
 	if (!r)
 	{
+		if (!writerContext.cancelled)
+		{
+			cemuLog_log(LogType::Force, "WUA conversion failed while reading the source title files");
+			wxMessageBox(_("Conversion failed: a source title's files could not be read."), _("Error"), wxOK | wxCENTRE | wxICON_ERROR, this);
+		}
 		delete writerContext.fs;
 		writerContext.fs = nullptr;
 		std::error_code ec;
