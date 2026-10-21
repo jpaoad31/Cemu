@@ -84,6 +84,20 @@ the macOS camera (40e4ce9), Stop emulation and the shutdown fixes (1428abd).
   only (0x42, after a CPU upload) is untouched.
 - Note: Debug > Dump > Textures works (LatteTextureLoader_UpdateTextureSliceData), but only writes textures
   Cemu loads from memory after it's enabled: turn it on before entering a screen, not on it.
+- **Metal: compressed <-> uncompressed copies via a buffer:** saved as `~/temp/cemu-patches/metal-block-copy-via-buffer.patch`
+  (applies on 83e8415), **not applied**. Metal's texture-to-texture blit needs matching pixel formats, so a copy between
+  e.g. a UINT_R16_G16_B16_A16 render target and the BC1 texture aliasing it does nothing. The patch routes such copies
+  (same bytes per block, native formats, 2D) through a buffer. A candidate for FFL's GPU-compressed Mii face textures
+  (FFLiCompressorImpl<BC1/BC3> renders into a 0x11F colour buffer aliasing the BC texture), but in a boot test the path
+  never ran, so it's unconfirmed.
+- **GPU colour clears reset the texture's RAM change tracker** (uncommitted; `LatteRenderTarget.cpp`
+  LatteRenderTarget_applyTextureColorClear). Binding a colour buffer for drawing calls LatteTexture_UpdateDataToLatest,
+  which reloads the texture from RAM if RAM's hash changed. A GPU clear doesn't touch RAM or the hash, so a CPU write
+  made before the clear (Wii Fit U's body test: the icon slot first held the photo, or an earlier icon's CPU alpha
+  pass) was reloaded over the clear at the first draw, and the Mii landed on a stale background. On hardware the clear
+  overwrites memory, so the earlier CPU write no longer counts. Found with the gated `[TextureReadback-CPU]`
+  diagnostics (GX2_Misc.cpp skipped-in-display-list line, LatteAsyncCommands.cpp per-candidate lines; Texture
+  readback logging only).
 
 ## Backlog (later)
 

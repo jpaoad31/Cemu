@@ -710,6 +710,12 @@ void LatteRenderTarget_applyTextureColorClear(LatteTexture* texture, uint32 slic
 	{
 		g_renderer->texture_clearColorSlice(texture, sliceIndex, mipIndex, r, g, b, a);
 		LatteTexture_MarkDynamicTextureAsChanged(texture->baseView, sliceIndex, mipIndex, eventCounter);
+		// The clear supersedes whatever the CPU wrote to this memory before it (on hardware the GPU overwrites
+		// it). Without resetting the change tracker, the next bind as a render target sees the older CPU write
+		// as a change (LatteTexture_UpdateDataToLatest) and reloads it over the clear. Wii Fit U renders a Mii
+		// icon into a target the CPU had written (a photo, or an earlier icon's alpha pass): the Mii landed on
+		// the stale background instead of on the cleared one.
+		LatteTC_ResetTextureChangeTracker(texture, true);
 	}
 }
 
