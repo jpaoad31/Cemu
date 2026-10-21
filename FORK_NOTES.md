@@ -30,6 +30,17 @@ the graphic-pack code overlay (ecbd4a0), `--dump-nus` (88006ec), the WUA convers
 - **Title Manager:** a failed WUA conversion shows an error instead of closing silently. The cause of
   the v81 conversion failure is still unknown.
 - **Known, minor:** Cemu can crash (signal 11) on exit after a game ran ("Game info: Not running").
+- **Camera on macOS** (uncommitted until tested): the GamePad camera shows the Mac's camera.
+  - `camera.cpp`: structures per WUT's camera.h. Stream info is height at +4, width at +8 (Cemu had
+    them swapped). The decode-done event passes surface/handle/failed (Cemu passed the size as the
+    handle). Frames arrive at the requested rate (fps 1 = 30, 0 = 15) and are written into the
+    submitted surface as NV12, 640x480, pitch 768 (Wii Fit U: 0x87000-byte surfaces, UV at
+    +0x5A000). Black when there's no frame yet, no permission or no backend.
+  - `CameraBackend.h` + `CameraBackendMacOS.cpp` + `CameraCaptureMacOS.{h,mm}`: AVFoundation, the
+    default video device, 640x480 preset (or medium), NV12 video range; center-crop to 4:3 and
+    nearest-neighbour scale. `CameraBackendNull.cpp` for other platforms.
+  - Permission: `NSCameraUsageDescription` in `MacOSXBundleInfo.plist.in`; asks on first CAMOpen,
+    starts once granted, logs if denied.
 
 ## Backlog (later)
 
@@ -48,11 +59,6 @@ the graphic-pack code overlay (ecbd4a0), `--dump-nus` (88006ec), the WUA convers
     - Sniff real meter <-> GamePad IR with a Pico and an IrDA transceiver, to check the protocol.
     - Or bridge the real meter to Cemu over USB.
     - Firmware RE/decomp: identify the MCU and its debug access (SWD?) first.
-- **Camera on macOS.** `src/Cafe/OS/libs/camera/camera.cpp` is a stand-in: it returns the game's
-  own buffers untouched at 60 Hz, so Wii Fit U's weigh-in photo comes out blank. Feed real
-  AVFoundation frames, converted to the format the game's `CAMSubmitTargetSurface` buffers
-  expect (check the game's CAM* calls in `step.dis`), with the macOS camera permission
-  (`NSCameraUsageDescription` in the bundle).
 - **An input expression editor** like Dolphin's: mouse axes, combined inputs, `timer()` and so on.
   Cemu only maps keys, buttons and sticks; the mouse is wired to GamePad touch and gyro.
 - **Real Balance Board passthrough** in the native Wiimote provider: the extension ID is wrong

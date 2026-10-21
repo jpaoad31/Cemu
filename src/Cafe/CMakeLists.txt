@@ -220,6 +220,7 @@ add_library(CemuCafe
   OS/libs/avm/avm.h
   OS/libs/camera/camera.cpp
   OS/libs/camera/camera.h
+  OS/libs/camera/CameraBackend.h
   OS/libs/coreinit/coreinit_Alarm.cpp
   OS/libs/coreinit/coreinit_Alarm.h
   OS/libs/coreinit/coreinit_Atomic.cpp
@@ -552,12 +553,24 @@ if(APPLE)
 	target_sources(CemuCafe PRIVATE
 	    HW/Latte/Renderer/MetalView.mm
 	    HW/Latte/Renderer/MetalView.h
+	    OS/libs/camera/CameraBackendMacOS.cpp
+	    OS/libs/camera/CameraCaptureMacOS.h
+	    OS/libs/camera/CameraCaptureMacOS.mm
+	)
+	target_link_libraries(CemuCafe PRIVATE
+	    "-framework AVFoundation"
+	    "-framework CoreMedia"
+	    "-framework CoreVideo"
 	)
 	if (ENABLE_VULKAN)
 		target_sources(CemuCafe PRIVATE
 		    HW/Latte/Renderer/Vulkan/CocoaSurface.mm
 		)
 	endif()
+else()
+	target_sources(CemuCafe PRIVATE
+	    OS/libs/camera/CameraBackendNull.cpp
+	)
 endif()
 
 if(ENABLE_METAL)
