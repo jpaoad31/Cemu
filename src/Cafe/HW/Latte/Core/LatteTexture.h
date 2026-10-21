@@ -159,6 +159,7 @@ public:
 	// last update (dynamic)
 	uint64 lastWriteEventCounter;
 	uint64 lastUpdateEventCounter;
+	uint64 lastCpuReadbackDynamicUpdate{}; // slice 0 mip 0 lastDynamicUpdate at the last CPU-requested readback (GX2Invalidate CPU + color buffer)
 	uint32 lastUpdateFrameCounter{};
 	uint32 reloadCount{};
 	// last update (from RAM data)

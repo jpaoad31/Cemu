@@ -43,12 +43,18 @@ typedef struct
 			LatteSurfaceCopyParam dst;
 			LatteSurfaceCopyRect rect;
 		}textureCopy;
+
+		struct
+		{
+			MPTR physAddr;
+		}cpuReadback;
 	};
 }LatteAsyncCommand_t;
 
 #define ASYNC_CMD_FORCE_TEXTURE_READBACK		1
 #define ASYNC_CMD_DELETE_SHADER					2
 #define ASYNC_CMD_TEXTURE_COPY					3
+#define ASYNC_CMD_CPU_READBACK					4
 
 std::queue<LatteAsyncCommand_t> LatteAsyncCommandQueue;
 
@@ -74,6 +80,47 @@ void LatteAsyncCommands_queueForceTextureReadback(MPTR physAddr, MPTR mipAddr, u
 	swl_gpuAsyncCommands.LockWrite();
 	LatteAsyncCommandQueue.push(asyncCommand);
 	swl_gpuAsyncCommands.UnlockWrite();
+}
+
+/*
+ * The CPU is about to read GPU-rendered texture data at physAddr (GX2Invalidate with the CPU and
+ * color-buffer flags). Cemu keeps render targets on the host GPU and mirrors only linear ones back to
+ * RAM, so read back any GPU-written tiled color texture that starts there. Wii Fit U renders Mii icons
+ * into a tiled RGBA8 target and then thresholds their alpha on the CPU (RPSysMiiIcon::BinarizationAlpha):
+ * without this the CPU edited stale RAM and the next reload replaced the icon with that garbage.
+ */
+void LatteAsyncCommands_queueCpuReadback(MPTR physAddr)
+{
+	LatteAsyncCommand_t asyncCommand = {};
+	asyncCommand.type = ASYNC_CMD_CPU_READBACK;
+	asyncCommand.cpuReadback.physAddr = physAddr;
+	swl_gpuAsyncCommands.LockWrite();
+	LatteAsyncCommandQueue.push(asyncCommand);
+	swl_gpuAsyncCommands.UnlockWrite();
+}
+
+static void _LatteAsyncCommands_cpuReadback(MPTR physAddr)
+{
+	std::vector<LatteTexture*> textures;
+	LatteTC_LookupTexturesByPhysAddr(physAddr, textures);
+	for (LatteTexture* tex : textures)
+	{
+		if (!tex->isUpdatedOnGPU || tex->isDepth || tex->enableReadback) // linear ones are mirrored already
+			continue;
+		if (tex->overwriteInfo.hasResolutionOverwrite || tex->dim != Latte::E_DIM::DIM_2D || !tex->baseView)
+			continue;
+		if (Latte::GetHWFormat(tex->format) != Latte::E_HWFMT::HWFMT_8_8_8_8) // what the RAM write-back handles for tiled textures
+			continue;
+		LatteTextureSliceMipInfo* sliceMipInfo = tex->sliceMipInfo + tex->GetSliceMipArrayIndex(0, 0);
+		// only if the GPU wrote it since the last such readback: the same call after the CPU edits the data must not undo them
+		if (sliceMipInfo->lastDynamicUpdate <= tex->lastCpuReadbackDynamicUpdate)
+			continue;
+		tex->lastCpuReadbackDynamicUpdate = sliceMipInfo->lastDynamicUpdate;
+		cemuLog_log(LogType::TextureReadback, "[TextureReadback-CPU] PhysAddr {:08x} Res {}x{} Fmt {:04x} TM {}", tex->physAddress, tex->width, tex->height, (uint32)tex->format, (uint32)tex->tileMode);
+		LatteTexture_UpdateDataToLatest(tex);
+		LatteTextureReadback_StartTransfer(tex->baseView);
+		LatteTextureReadback_UpdateFinishedTransfers(true);
+	}
 }
 
 void LatteAsyncCommands_queueDeleteShader(uint64 shaderBaseHash, uint64 shaderAuxHash, LatteConst::ShaderType shaderType)
@@ -153,6 +200,10 @@ void LatteAsyncCommands_checkAndExecute()
 		else if (asyncCommand.type == ASYNC_CMD_TEXTURE_COPY)
 		{
 			LatteSurfaceCopy_copySurfaceNew(asyncCommand.textureCopy.src, asyncCommand.textureCopy.dst, asyncCommand.textureCopy.rect);
+		}
+		else if (asyncCommand.type == ASYNC_CMD_CPU_READBACK)
+		{
+			_LatteAsyncCommands_cpuReadback(asyncCommand.cpuReadback.physAddr);
 		}
 		else
 		{

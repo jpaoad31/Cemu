@@ -5,6 +5,7 @@
 #include "config/ActiveSettings.h"
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
 #include "Cafe/HW/Latte/Core/LatteBufferCache.h"
+#include "Cafe/HW/Latte/Core/LatteAsyncCommands.h"
 #include "Cafe/HW/Latte/Core/LattePM4.h"
 #include "GX2_Command.h"
 #include "GX2_Event.h"
@@ -310,6 +311,18 @@ namespace GX2
 
 	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::CPU))
 	        LatteBufferCache_notifyDCFlush(invalidationAddr, invalidationSize);
+
+	    // CPU + color buffer: the CPU is about to access a render target's memory. On hardware the GPU
+	    // wrote it there; Cemu holds tiled render targets on the host only, so finish the queued GPU work
+	    // and read the texture back into RAM first (see LatteAsyncCommands_queueCpuReadback)
+	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::CPU) && HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_COLOR_BUFFER) &&
+	        invalidationAddr != MPTR_NULL && invalidationSize != 0 && invalidationSize != 0xFFFFFFFFu && !GX2GetDisplayListWriteStatus())
+	    {
+	        GX2Command_Flush(0x100, true);
+	        GX2WaitTimeStamp(GX2GetLastSubmittedTimeStamp());
+	        LatteAsyncCommands_queueCpuReadback(memory_virtualToPhysical(invalidationAddr));
+	        LatteAsyncCommands_waitUntilAllProcessed();
+	    }
 
 	    if (coherCntl == static_cast<Latte::E_COHER_CNTL>(0))
 	        return; // no GPU-side invalidation

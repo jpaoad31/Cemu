@@ -65,6 +65,25 @@ the macOS camera (40e4ce9), Stop emulation and the shutdown fixes (1428abd).
     released.
   - Test hook: `--test-stop-cycle CYCLES,SECONDS[,quit]` (launch with -g, stop after SECONDS, relaunch, CYCLES
     times, then quit; `,quit` quits with the game running on the last cycle). For automated regression runs.
+- **Texture cache: no reuse across linear/tiled layouts:** saved as `~/temp/cemu-patches/texcache-tilemode-match.patch`
+  (applies on 47cfc00), **not applied**: a real bug, but not the Wii Fit U snapshot cause. Neither the view lookup cache
+  (its own "todo - add tileMode param") nor CanTextureBeRepresentedAsView compares tile modes, so a linear texture can
+  be served by an older tiled texture with the same address/size/pitch/format (256x256 RGBA8: pitch 256 both ways).
+  The patch adds TM_IsLinear (LatteReg.h), an optional tileMode filter on lookup/lookupWithColorOrDepthType
+  (LatteTextureView), passes it from the sampler binding (LatteTextureLegacy) and stops CreateMapping reusing across
+  a linear/tiled change. Upstream has the same code.
+- **CPU access to GPU-rendered tiled textures** (committed; `GX2_Misc.cpp` GX2Invalidate, `LatteAsyncCommands.{h,cpp}`
+  ASYNC_CMD_CPU_READBACK, `LatteTexture.h` lastCpuReadbackDynamicUpdate). Cemu mirrors render targets back to RAM
+  only when linear (and a few tiny tiled ones), so a game that edits a tiled render target on the CPU works on stale
+  RAM. Wii Fit U renders Mii icons (RPSysMiiIcon::MakeTexture: InitializeRenderTarget type 1, RGBA8, default tile
+  mode = tiled) and thresholds their alpha in place on the CPU (BinarizationAlpha: GX2Invalidate 0x72 =
+  CPU|texture|color|depth, GetImageBuffer, threshold, GX2Invalidate again); Cemu then reloaded the texture from that
+  stale RAM: real scene colours scrambled into stripes and blocks, with cut-out alpha. Now GX2Invalidate with CPU +
+  COLOR_BUFFER (not inside a display list) flushes, waits for the GPU and reads back any GPU-written tiled 8_8_8_8 2D
+  texture at that address, once per GPU write (so the second call, after the CPU edit, doesn't undo it). CPU+TEXTURE
+  only (0x42, after a CPU upload) is untouched.
+- Note: Debug > Dump > Textures works (LatteTextureLoader_UpdateTextureSliceData), but only writes textures
+  Cemu loads from memory after it's enabled: turn it on before entering a screen, not on it.
 
 ## Backlog (later)
 
@@ -83,6 +102,12 @@ the macOS camera (40e4ce9), Stop emulation and the shutdown fixes (1428abd).
     - Sniff real meter <-> GamePad IR with a Pico and an IrDA transceiver, to check the protocol.
     - Or bridge the real meter to Cemu over USB.
     - Firmware RE/decomp: identify the MCU and its debug access (SWD?) first.
+- **Unified memory for Metal (Apple Silicon):** the CPU and GPU share memory, but Cemu keeps guest RAM and GPU
+  resources apart (built for discrete GPUs) and copies between them. Wrap guest RAM as a no-copy MTLBuffer and do
+  readbacks/uploads as GPU compute passes that convert between Latte tiling and Metal textures directly in guest RAM
+  (linear textures in place). Readbacks would get cheap enough to do whenever the game may look, which removes the
+  stale-RAM class of bugs (like the Mii icon alpha pass) instead of fixing each case. Big: memory mapping, the Metal
+  backend, the texture cache. After the Fit Meter.
 - **An input expression editor** like Dolphin's: mouse axes, combined inputs, `timer()` and so on.
   Cemu only maps keys, buttons and sticks; the mouse is wired to GamePad touch and gyro.
 - **Real Balance Board passthrough** in the native Wiimote provider: the extension ID is wrong
