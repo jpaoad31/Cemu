@@ -1036,6 +1036,13 @@ LatteTextureView* LatteTexture_CreateMapping(MPTR physAddr, MPTR physMipAddr, si
 	{
 		sint32 relativeMipIndex;
 		sint32 relativeSliceIndex;
+		// a texture with the other memory layout (linear vs tiled) can't stand for this one even if address,
+		// size, pitch and format agree: its data would be decoded with the wrong layout
+		if (Latte::TM_IsLinear(tex->tileMode) != Latte::TM_IsLinear(tileMode))
+		{
+			allowCreateNewDataTexture = true;
+			continue;
+		}
 		VIEWCOMPATIBILITY viewCompatibility = LatteTexture_CanTextureBeRepresentedAsView(tex, physAddr, width, height, pitch, dimView, format, isDepth, firstMip, numMip, firstSlice, numSlice, relativeMipIndex, relativeSliceIndex);
 		if (viewCompatibility == VIEW_NOT_COMPATIBLE)
 		{

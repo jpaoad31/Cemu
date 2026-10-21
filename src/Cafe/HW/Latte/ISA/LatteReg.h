@@ -95,6 +95,11 @@ namespace Latte
 		return (uint32)tm >= 4;
 	}
 
+	inline bool TM_IsLinear(const E_HWTILEMODE tm)
+	{
+		return tm == E_HWTILEMODE::TM_LINEAR_GENERAL || tm == E_HWTILEMODE::TM_LINEAR_ALIGNED;
+	}
+
 	inline bool TM_IsMacroTiled(const E_GX2TILEMODE tm)
 	{
 		return (uint32)tm >= 4 && (uint32)tm != 16;

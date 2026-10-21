@@ -40,8 +40,11 @@ public:
 	static void Add(LatteTextureView* view, uint32 baseMip = 0, uint32 baseSlice = 0);
 	static void RemoveAll(LatteTextureView* view);
 
-	static LatteTextureView* lookup(MPTR physAddr, sint32 width, sint32 height, sint32 depth, sint32 pitch, sint32 firstMip, sint32 numMip, sint32 firstSlice, sint32 numSlice, Latte::E_GX2SURFFMT format, Latte::E_DIM dim);
-	static LatteTextureView* lookupWithColorOrDepthType(MPTR physAddr, sint32 width, sint32 height, sint32 depth, sint32 pitch, sint32 firstMip, sint32 numMip, sint32 firstSlice, sint32 numSlice, Latte::E_GX2SURFFMT format, Latte::E_DIM dim, bool isDepth);
+	// tileMode: if set, a view whose texture has the other memory layout (linear vs tiled) is not a match.
+	// Two textures can share address, size, pitch and format (e.g. 256x256 RGBA8: pitch 256 linear and
+	// 2D-tiled) and still lay the same bytes out differently.
+	static LatteTextureView* lookup(MPTR physAddr, sint32 width, sint32 height, sint32 depth, sint32 pitch, sint32 firstMip, sint32 numMip, sint32 firstSlice, sint32 numSlice, Latte::E_GX2SURFFMT format, Latte::E_DIM dim, std::optional<Latte::E_HWTILEMODE> tileMode = std::nullopt);
+	static LatteTextureView* lookupWithColorOrDepthType(MPTR physAddr, sint32 width, sint32 height, sint32 depth, sint32 pitch, sint32 firstMip, sint32 numMip, sint32 firstSlice, sint32 numSlice, Latte::E_GX2SURFFMT format, Latte::E_DIM dim, bool isDepth, std::optional<Latte::E_HWTILEMODE> tileMode = std::nullopt);
 	static LatteTextureView* lookupSlice(MPTR physAddr, sint32 width, sint32 height, sint32 pitch, sint32 firstMip, sint32 firstSlice, Latte::E_GX2SURFFMT format);
 	static LatteTextureView* lookupSliceMinSize(MPTR physAddr, sint32 minWidth, sint32 minHeight, sint32 pitch, sint32 firstMip, sint32 firstSlice, Latte::E_GX2SURFFMT format);
 	static LatteTextureView* lookupSliceEx(MPTR physAddr, sint32 width, sint32 height, sint32 pitch, sint32 firstMip, sint32 firstSlice, Latte::E_GX2SURFFMT format, bool isDepth);
