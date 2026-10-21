@@ -960,7 +960,39 @@ void GraphicPack2::LoadReplacedFiles()
 	{
 	    // setup redirections
 		fscDeviceRedirect_map();
-		_iterateReplacedFiles(codePath, false, CafeSystem::GetInternalVirtualCodeFolder().c_str());
+		_iterateReplacedFiles(codePath, false, GetCodeRedirectBase().c_str());
+	}
+}
+
+// The redirect device is mounted at "/" and looks files up relative to it (like "vol/content/"),
+// so the code folder must be registered without its leading slash.
+std::string GraphicPack2::GetCodeRedirectBase()
+{
+	std::string base = CafeSystem::GetInternalVirtualCodeFolder();
+	while (!base.empty() && base.front() == '/')
+		base.erase(0, 1);
+	return base;
+}
+
+// Graphic packs are activated after the main executable is loaded, so a pack's code/Step.rpx would
+// only be redirected once the original RPX had already been read. Register the code/ redirections
+// of the enabled packs for the current title early, before LoadMainExecutable().
+void GraphicPack2::LoadReplacedCodeFilesForCurrentTitle()
+{
+	uint64 titleId = CafeSystem::GetForegroundTitleId();
+	for (const auto& gp : GraphicPack2::GetGraphicPacks())
+	{
+		if (!gp->IsEnabled() || !gp->ContainsTitleId(titleId))
+			continue;
+		fs::path codePath = gp->GetRulesPath();
+		codePath = codePath.remove_filename();
+		codePath.append("code");
+		std::error_code ec;
+		if (!fs::exists(codePath, ec))
+			continue;
+		fscDeviceRedirect_map();
+		gp->_iterateReplacedFiles(codePath, false, GetCodeRedirectBase().c_str());
+		cemuLog_log(LogType::Force, "Graphic pack {} replaces files in the code folder", gp->GetVirtualPath());
 	}
 }
 

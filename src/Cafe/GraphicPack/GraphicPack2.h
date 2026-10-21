@@ -181,6 +181,7 @@ public:
 	static void WaitUntilReady(); // wait until all graphic packs finished activation
 
 	static void ActivateForCurrentTitle();
+	static void LoadReplacedCodeFilesForCurrentTitle(); // redirect enabled packs' code/ files before the main executable is loaded
 	static void Reset();
 
 private:
@@ -264,6 +265,7 @@ private:
 	CustomShader LoadShader(const fs::path& path, uint64 shader_base_hash, uint64 shader_aux_hash, GP_SHADER_TYPE shader_type, bool isMetalShader) const;
 	void ApplyShaderPresets(std::string& shader_source) const;
 	void LoadReplacedFiles();
+	static std::string GetCodeRedirectBase();
 	void _iterateReplacedFiles(const fs::path& currentPath, bool isAOC, const char* virtualMountBase);
 
 	// ram mappings

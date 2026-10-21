@@ -385,6 +385,7 @@ void cemu_initForGame()
 	PPCTimer_start();
 	// coreinit is bootstrapped first and then the main game executable is loaded
 	RPLLoader_LoadCoreinit();
+	GraphicPack2::LoadReplacedCodeFilesForCurrentTitle();
 	LoadMainExecutable();
 	// log info for launched title
 	InfoLog_TitleLoaded();
