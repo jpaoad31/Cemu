@@ -173,6 +173,10 @@ private:
 	GraphicPacksWindow2* m_graphic_pack_window = nullptr;
 
 	wxTimer* m_timer;
+	// --test-stop-cycle
+	wxTimer* m_testStopCycleTimer = nullptr;
+	uint32 m_testStopCycleDone = 0;
+	void OnTestStopCycleTimer(wxTimerEvent& event);
 	wxPoint m_mouse_position{};
 	std::chrono::steady_clock::time_point m_last_mouse_move_time;
 	wxSize m_restored_size;

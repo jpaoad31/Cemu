@@ -21,6 +21,10 @@ static bool g_compilePipelineThreadInit{false};
 static std::mutex g_compilePipelineMutex;
 static std::condition_variable g_compilePipelineCondVar;
 static std::queue<MetalPipelineCompiler*> g_compilePipelineRequests;
+// the requests point into the renderer's pipeline objects, so the threads are stopped (and the pending
+// requests dropped) when the renderer shuts down. They used to be detached and outlive it
+static std::vector<std::thread> g_compilePipelineThreads;
+static bool g_compilePipelineShutdown{false};
 
 static void compileThreadFunc(sint32 threadIndex)
 {
@@ -33,8 +37,10 @@ static void compileThreadFunc(sint32 threadIndex)
 	while (true)
 	{
 		std::unique_lock lock(g_compilePipelineMutex);
-		while (g_compilePipelineRequests.empty())
+		while (g_compilePipelineRequests.empty() && !g_compilePipelineShutdown)
 			g_compilePipelineCondVar.wait(lock);
+		if (g_compilePipelineShutdown)
+			return;
 
 		MetalPipelineCompiler* request = g_compilePipelineRequests.front();
 
@@ -59,11 +65,29 @@ static void initCompileThread()
 
 	numCompileThreads = std::min(numCompileThreads, 8u); // cap at 8
 
+	g_compilePipelineShutdown = false;
 	for (uint32 i = 0; i < numCompileThreads; i++)
+		g_compilePipelineThreads.emplace_back(compileThreadFunc, i);
+}
+
+static void stopCompileThreads()
+{
 	{
-		std::thread compileThread(compileThreadFunc, i);
-		compileThread.detach();
+		std::unique_lock lock(g_compilePipelineMutex);
+		g_compilePipelineShutdown = true;
 	}
+	g_compilePipelineCondVar.notify_all();
+	for (auto& thread : g_compilePipelineThreads)
+		thread.join();
+	g_compilePipelineThreads.clear();
+	// drop the requests that never ran
+	std::unique_lock lock(g_compilePipelineMutex);
+	while (!g_compilePipelineRequests.empty())
+	{
+		delete g_compilePipelineRequests.front();
+		g_compilePipelineRequests.pop();
+	}
+	g_compilePipelineThreadInit = false;
 }
 
 static void queuePipeline(MetalPipelineCompiler* v)
@@ -91,6 +115,9 @@ bool IsAsyncPipelineAllowed(const MetalAttachmentsInfo& attachmentsInfo, Vector2
 	return true;
 }
 
+struct CachedPipeline;
+ConcurrentQueue<CachedPipeline*> g_mtlPipelineCachingQueue;
+
 MetalPipelineCache* g_mtlPipelineCache = nullptr;
 
 MetalPipelineCache& MetalPipelineCache::GetInstance()
@@ -103,8 +130,32 @@ MetalPipelineCache::MetalPipelineCache(class MetalRenderer* metalRenderer) : m_m
     g_mtlPipelineCache = this;
 }
 
+// Stops every thread that uses this cache or the renderer: async pipeline compilation, cache loading and the
+// cache writer. Called from MetalRenderer::Shutdown (before the shaders are unloaded) and the destructor
+void MetalPipelineCache::StopThreads()
+{
+    stopCompileThreads();
+    // cache loading threads (still running if the title was stopped while the cache was loading)
+    if (m_numCompilationThreads != 0)
+        EndLoading();
+    for (auto& thread : m_loadingThreads)
+        thread.join();
+    m_loadingThreads.clear();
+    // cache writer: it finishes the queued jobs, then exits on the null job
+    if (m_pipelineCacheStoreThread)
+    {
+        g_mtlPipelineCachingQueue.push(nullptr);
+        m_pipelineCacheStoreThread->join();
+        delete m_pipelineCacheStoreThread;
+        m_pipelineCacheStoreThread = nullptr;
+    }
+}
+
 MetalPipelineCache::~MetalPipelineCache()
 {
+    StopThreads();
+    if (g_mtlPipelineCache == this)
+        g_mtlPipelineCache = nullptr;
     for (auto& [key, pipelineObj] : m_pipelineCache)
     {
         pipelineObj->m_pipeline->release();
@@ -285,10 +336,7 @@ uint32 MetalPipelineCache::BeginLoading(uint64 cacheTitleId)
 	//	m_numCompilationThreads = 1;
 
 	for (uint32 i = 0; i < m_numCompilationThreads; i++)
-	{
-		std::thread compileThread(&MetalPipelineCache::CompilerThread, this);
-		compileThread.detach();
-	}
+		m_loadingThreads.emplace_back(&MetalPipelineCache::CompilerThread, this);
 
 	// open cache file or create it
 	cemu_assert_debug(s_cache == nullptr);
@@ -472,14 +520,12 @@ void MetalPipelineCache::LoadPipelineFromCache(std::span<uint8> fileData)
 	s_spinlockSharedInternal.unlock();
 }
 
-ConcurrentQueue<CachedPipeline*> g_mtlPipelineCachingQueue;
 
 void MetalPipelineCache::AddCurrentStateToCache(uint64 pipelineStateHash, const MetalAttachmentsInfo& lastUsedAttachmentsInfo)
 {
 	if (!m_pipelineCacheStoreThread)
 	{
 		m_pipelineCacheStoreThread = new std::thread(&MetalPipelineCache::WorkerThread, this);
-		m_pipelineCacheStoreThread->detach();
 	}
 	// fill job structure with cached GPU state
 	// for each cached pipeline we store:
@@ -601,6 +647,8 @@ void MetalPipelineCache::WorkerThread()
 	{
 		CachedPipeline* job;
 		g_mtlPipelineCachingQueue.pop(job);
+		if (!job)
+			return; // StopThreads
 		if (!s_cache)
 		{
 			delete job;

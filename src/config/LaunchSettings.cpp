@@ -79,7 +79,8 @@ std::optional<int> LaunchSettings::HandleCommandline(const std::vector<std::wstr
 		("force-interpreter", po::value<bool>()->implicit_value(true), "Force interpreter CPU emulation, disables recompiler. Useful for debugging purposes where you want to get accurate memory accesses and stack traces.")
 		("force-multicore-interpreter", po::value<bool>()->implicit_value(true), "Force multi-core interpreter CPU emulation, disables recompiler. Only useful for getting stack traces, but slightly faster than the single-core interpreter mode.")
 		("enable-gdbstub", po::value<bool>()->implicit_value(true), "Enable GDB stub to debug executables inside Cemu using an external debugger")
-		("open-debugger", po::value<bool>()->implicit_value(true), "Open the PPC debugger window on startup");
+		("open-debugger", po::value<bool>()->implicit_value(true), "Open the PPC debugger window on startup")
+		("test-stop-cycle", po::value<std::string>(), "Testing: CYCLES,SECONDS[,quit]. Launch the --game title, stop it after SECONDS, relaunch it, CYCLES times, then quit (with ,quit: the last cycle quits with the game still running)");
 
 	po::options_description hidden{ "Hidden options" };
 	hidden.add_options()
@@ -199,6 +200,19 @@ std::optional<int> LaunchSettings::HandleCommandline(const std::vector<std::wstr
 
 		if (vm.count("open-debugger"))
 			s_open_debugger = vm["open-debugger"].as<bool>();
+
+		if (vm.count("test-stop-cycle"))
+		{
+			uint32 cycles = 0, seconds = 0;
+			const std::string arg = vm["test-stop-cycle"].as<std::string>();
+			if (sscanf(arg.c_str(), "%u,%u", &cycles, &seconds) == 2 && cycles > 0 && seconds > 0)
+			{
+				s_test_stop_cycle = std::make_pair(cycles, seconds);
+				s_test_stop_cycle_quit_running = arg.size() > 5 && arg.ends_with(",quit");
+			}
+			else
+				cemuLog_log(LogType::Force, "--test-stop-cycle: expected CYCLES,SECONDS");
+		}
 
 		if (vm.count("forward-console-logging"))
 		{

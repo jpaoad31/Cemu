@@ -7,6 +7,12 @@ typedef struct
 
 udsWorkspace_t* udsWorkspace = nullptr;
 
+// the workspace lives in the sys area, which is rewound when a title ends
+void nnUds_ResetForTitleEnd()
+{
+	udsWorkspace = nullptr;
+}
+
 void nnUdsExport___sti___11_uds_Api_cpp_f5d9abb2(PPCInterpreter_t* hCPU)
 {
 	debug_printf("__sti___11_uds_Api_cpp_f5d9abb2()\n");

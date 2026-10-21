@@ -39,6 +39,10 @@ public:
 
 	static std::optional<uint32> GetPersistentId() { return s_persistent_id; }
 
+	// testing: launch the -g game, stop it after `seconds`, relaunch; `cycles` times, then quit
+	static std::optional<std::pair<uint32, uint32>> GetTestStopCycle() { return s_test_stop_cycle; }
+	static bool GetTestStopCycleQuitRunning() { return s_test_stop_cycle_quit_running; } // ",quit": the last cycle quits Cemu with the game running
+
 	static uint32 GetPPCRecLowerAddr() { return ppcRec_limitLowerAddr; };
 	static uint32 GetPPCRecUpperAddr() { return ppcRec_limitUpperAddr; };
 
@@ -55,6 +59,9 @@ private:
 	inline static bool s_forward_console_logging = false;
 	inline static std::optional<std::string> s_cos_argstr{};
 	inline static std::unordered_map<fs::path, std::wstring> s_cos_mounts{};
+
+	inline static std::optional<std::pair<uint32, uint32>> s_test_stop_cycle{};
+	inline static bool s_test_stop_cycle_quit_running = false;
 
 	inline static bool s_enable_gdbstub = false;
 	inline static bool s_open_debugger = false;

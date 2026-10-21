@@ -61,6 +61,14 @@ public:
 			it.join();
 		s_threads.clear();
 
+		// Jobs still queued here belong to shaders that are deleted right after the renderer shuts down
+		// (LatteSHRC_UnloadAll). Drop them, and the semaphore counts they and the stop signals left: otherwise
+		// the threads of the next title pop freed shaders on start (heap corruption after stop -> relaunch)
+		s_compilationQueueMutex.lock();
+		s_compilationQueue.clear();
+		s_compilationQueueCount.reset();
+		s_compilationQueueMutex.unlock();
+
 		/*
 		if (s_airCacheThread)
 		{
@@ -227,6 +235,11 @@ RendererShaderMtl::RendererShaderMtl(MetalRenderer* mtlRenderer, ShaderType type
 
 RendererShaderMtl::~RendererShaderMtl()
 {
+	// a shader deleted before a compile thread picked it up must not stay in the queue
+	shaderMtlThreadPool.s_compilationQueueMutex.lock();
+	if (m_compilationState.hasState(COMPILATION_STATE::QUEUED))
+		shaderMtlThreadPool.s_compilationQueue.erase(std::remove(shaderMtlThreadPool.s_compilationQueue.begin(), shaderMtlThreadPool.s_compilationQueue.end(), this), shaderMtlThreadPool.s_compilationQueue.end());
+	shaderMtlThreadPool.s_compilationQueueMutex.unlock();
     if (m_function)
         m_function->release();
 }

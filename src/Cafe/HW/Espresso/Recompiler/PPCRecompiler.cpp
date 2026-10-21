@@ -678,14 +678,16 @@ void PPCRecompiler_init()
 		cemuLog_log(LogType::Force, "Recompiler disabled. Command line --force-interpreter or force-multicore-interpreter was passed");
 		return;
 	}
-	if (ppcRecompilerInstanceData)
+	// The instance data is reserved once and kept for the lifetime of the process: the AArch64 backend generates
+	// its enter/leave stubs only once and bakes this address into them, so a new reservation per title (at a
+	// possibly different address) left recompiled code of the next title using the old, freed range.
+	// The jump table blocks inside it are released by PPCRecompiler_Shutdown and committed again on demand
+	if (!ppcRecompilerInstanceData)
 	{
-		MemMapper::FreeReservation(ppcRecompilerInstanceData, sizeof(PPCRecompilerInstanceData_t));
-		ppcRecompilerInstanceData = nullptr;
+		cemuLog_logDebug(LogType::Force, "Reserving {}MB for recompiler instance data", (sint32)(sizeof(PPCRecompilerInstanceData_t) / 1024 / 1024));
+		ppcRecompilerInstanceData = (PPCRecompilerInstanceData_t*)MemMapper::ReserveMemory(nullptr, sizeof(PPCRecompilerInstanceData_t), MemMapper::PAGE_PERMISSION::P_RW);
+		MemMapper::AllocateMemory(&(ppcRecompilerInstanceData->_x64XMM_xorNegateMaskBottom), sizeof(PPCRecompilerInstanceData_t) - offsetof(PPCRecompilerInstanceData_t, _x64XMM_xorNegateMaskBottom), MemMapper::PAGE_PERMISSION::P_RW, true);
 	}
-	cemuLog_logDebug(LogType::Force, "Reserving {}MB for recompiler instance data", (sint32)(sizeof(PPCRecompilerInstanceData_t) / 1024 / 1024));
-	ppcRecompilerInstanceData = (PPCRecompilerInstanceData_t*)MemMapper::ReserveMemory(nullptr, sizeof(PPCRecompilerInstanceData_t), MemMapper::PAGE_PERMISSION::P_RW);
-	MemMapper::AllocateMemory(&(ppcRecompilerInstanceData->_x64XMM_xorNegateMaskBottom), sizeof(PPCRecompilerInstanceData_t) - offsetof(PPCRecompilerInstanceData_t, _x64XMM_xorNegateMaskBottom), MemMapper::PAGE_PERMISSION::P_RW, true);
 #ifdef ARCH_X86_64
 	PPCRecompilerX64Gen_generateRecompilerInterfaceFunctions();
 #elif defined(__aarch64__)

@@ -362,6 +362,11 @@ MainWindow::MainWindow()
 	m_last_mouse_move_time = std::chrono::steady_clock::now();
 
 	m_timer = new wxTimer(this, MAINFRAME_ID_TIMER1);
+	if (LaunchSettings::GetTestStopCycle() && LaunchSettings::GetLoadFile())
+	{
+		m_testStopCycleTimer = new wxTimer(this);
+		Bind(wxEVT_TIMER, &MainWindow::OnTestStopCycleTimer, this, m_testStopCycleTimer->GetId());
+	}
 	m_timer->Start(500);
 
 	LoadSettings();
@@ -618,6 +623,8 @@ bool MainWindow::FileLoad(const fs::path launchPath, wxLaunchGameEvent::INITIATE
 
 	CreateCanvas();
 	CafeSystem::LaunchForegroundTitle();
+	if (m_testStopCycleTimer)
+		m_testStopCycleTimer->StartOnce(LaunchSettings::GetTestStopCycle()->second * 1000);
 	RecreateMenu();
 	UpdateChildWindowTitleRunningState();
 
@@ -1852,6 +1859,35 @@ bool MainWindow::IsMenuHidden() const
 	return m_menu_visible;
 }
 
+// --test-stop-cycle CYCLES,SECONDS: stop the running game after SECONDS, relaunch it, CYCLES times, then quit
+void MainWindow::OnTestStopCycleTimer(wxTimerEvent& event)
+{
+	const auto [cycles, seconds] = *LaunchSettings::GetTestStopCycle();
+	if (m_game_launched)
+	{
+		if (LaunchSettings::GetTestStopCycleQuitRunning() && m_testStopCycleDone + 1 >= cycles)
+		{
+			cemuLog_log(LogType::Force, "test-stop-cycle: quitting with the game running");
+			Close();
+			return;
+		}
+		m_testStopCycleDone++;
+		cemuLog_log(LogType::Force, "test-stop-cycle: stopping ({}/{})", m_testStopCycleDone, cycles);
+		EndEmulation();
+		cemuLog_log(LogType::Force, "test-stop-cycle: stopped ({}/{})", m_testStopCycleDone, cycles);
+		if (m_testStopCycleDone >= cycles)
+		{
+			cemuLog_log(LogType::Force, "test-stop-cycle: done");
+			Close();
+			return;
+		}
+		m_testStopCycleTimer->StartOnce(2000); // relaunch after a short pause
+		return;
+	}
+	cemuLog_log(LogType::Force, "test-stop-cycle: relaunching");
+	FileLoad(*LaunchSettings::GetLoadFile(), wxLaunchGameEvent::INITIATED_BY::COMMAND_LINE);
+}
+
 void MainWindow::OnTimer(wxTimerEvent& event)
 {
 	if(m_update_available.valid() && future_is_ready(m_update_available))
@@ -2194,10 +2230,8 @@ void MainWindow::RecreateMenu()
 	}
 	else
 	{
-#ifdef CEMU_DEBUG_ASSERT
-		m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_END_EMULATION, _("Close game"));
+		m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_END_EMULATION, _("&Stop emulation") + "\tCtrl-.");
 		m_fileMenuSeparator1 = m_fileMenu->AppendSeparator();
-#endif
 	}
 
 	m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_OPEN_CEMU_FOLDER, _("Open Cemu folder"));

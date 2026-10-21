@@ -35,6 +35,21 @@ void coreinit_freeToSysArea(MPTR mem)
 	// todo
 }
 
+// Allocations made while Cemu initializes (SysAllocators, IOSU modules) live for the whole session;
+// everything after that belongs to the running title. Without a rewind each launch leaked its sys heap,
+// TLS blocks etc. and the area (32MiB) ran out after a few stop/relaunch cycles
+static MPTR sysAreaTitleStartOffset = 0;
+
+void coreinit_markSysAreaPersistentEnd()
+{
+	sysAreaTitleStartOffset = sysAreaAllocatorOffset;
+}
+
+void coreinit_rewindSysAreaForTitleEnd()
+{
+	sysAreaAllocatorOffset = sysAreaTitleStartOffset;
+}
+
 namespace coreinit
 {
 #define MEM_MAX_HEAP_TABLE (0x20)

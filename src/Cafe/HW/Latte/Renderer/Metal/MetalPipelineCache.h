@@ -21,6 +21,7 @@ public:
 	void EndLoading();
 	void LoadPipelineFromCache(std::span<uint8> fileData);
        void Close(); // called on title exit
+    void StopThreads(); // called when the renderer shuts down
 
     // Debug
     size_t GetPipelineCacheSize() const { return m_pipelineCache.size(); }
@@ -31,9 +32,10 @@ private:
     std::map<uint64, PipelineObject*> m_pipelineCache;
     FSpinlock m_pipelineCacheLock;
 
-	std::thread* m_pipelineCacheStoreThread;
+	std::thread* m_pipelineCacheStoreThread{nullptr};
+	std::vector<std::thread> m_loadingThreads;
 
-	class FileCache* s_cache;
+	class FileCache* s_cache{nullptr};
 
 	std::atomic_uint32_t m_numCompilationThreads{ 0 };
 	ConcurrentQueue<std::vector<uint8>> m_compilationQueue;

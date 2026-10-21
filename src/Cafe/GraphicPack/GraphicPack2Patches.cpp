@@ -5,6 +5,7 @@
 #include "util/helpers/StringParser.h"
 #include "Cemu/PPCAssembler/ppcAssembler.h"
 #include "Cafe/OS/RPL/rpl_structs.h"
+#include "Cafe/OS/RPL/rpl.h"
 #include "boost/algorithm/string.hpp"
 
 // error handler
@@ -149,9 +150,13 @@ void GraphicPack2::UnloadPatches()
 	// do this by calling RevertPatchesForModule for every module?
 	for (auto& itr : list_modules)
 		RevertPatchesForModule(itr);
-	// delete all patches
+	// delete all patches (and give their code caves back, otherwise every relaunch leaks them)
 	for (auto itr : list_patchGroups)
+	{
+		if (itr->codeCaveMem)
+			RPLLoader_ReleaseCodeCaveMem(itr->codeCaveMem);
 		delete itr;
+	}
 	list_patchGroups.clear();
 }
 

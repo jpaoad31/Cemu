@@ -134,6 +134,13 @@ uint8* extractCafeDefaultFont(sint32* size);
 MPTR placeholderFont = MPTR_NULL;
 sint32 placeholderFontSize = 0;
 
+// the placeholder font lives in the sys area, which is rewound when a title ends
+void coreinit_ResetPlaceholderFontForTitleEnd()
+{
+	placeholderFont = MPTR_NULL;
+	placeholderFontSize = 0;
+}
+
 void coreinitExport_OSGetSharedData(PPCInterpreter_t* hCPU)
 {
 	// parameters:

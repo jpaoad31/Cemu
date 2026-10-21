@@ -234,6 +234,16 @@ void GraphicPack2::ActivateForCurrentTitle()
 
 void GraphicPack2::Reset()
 {
+	// called when the title ends, after RPLLoader_UnloadAll: the modules in list_modules are freed already, and
+	// the emulated memory their patches went into is discarded, so forget them instead of reverting the patches
+	{
+		std::lock_guard<std::recursive_mutex> lock(mtx_patches);
+		list_modules.clear();
+	}
+	// deactivate the packs (deletes their patch groups, which stay flagged as applied otherwise), so that the
+	// next launch activates them again from scratch. Previously a relaunch in the same session skipped them
+	for (auto& gp : s_active_graphic_packs)
+		gp->Deactivate();
 	s_active_graphic_packs.clear();
 	s_isReady = false;
 }

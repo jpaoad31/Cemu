@@ -29,7 +29,7 @@ the graphic-pack code overlay (ecbd4a0), `--dump-nus` (88006ec), the WUA convers
   It skips linked FST entries (an update's FST lists the base's unchanged files).
 - **Title Manager:** a failed WUA conversion shows an error instead of closing silently. The cause of
   the v81 conversion failure is still unknown.
-- **Known, minor:** Cemu can crash (signal 11) on exit after a game ran ("Game info: Not running").
+- ~~Known, minor: Cemu could crash (signal 11) on exit after a game ran~~: the Metal layer bug, fixed with Stop emulation.
 - **Camera on macOS** (uncommitted until tested): the GamePad camera shows the Mac's camera.
   - `camera.cpp`: structures per WUT's camera.h. Stream info is height at +4, width at +8 (Cemu had
     them swapped). The decode-done event passes surface/handle/failed (Cemu passed the size as the
@@ -41,6 +41,29 @@ the graphic-pack code overlay (ecbd4a0), `--dump-nus` (88006ec), the WUA convers
     nearest-neighbour scale. `CameraBackendNull.cpp` for other platforms.
   - Permission: `NSCameraUsageDescription` in `MacOSXBundleInfo.plist.in`; asks on first CAMOpen,
     starts once granted, logs if denied.
+
+- **Stop emulation** (uncommitted): File -> "Stop emulation" (Cmd+.) in release builds (was debug-only, "unfinished -
+  crashes after repeated use"). Stop -> relaunch in one session now works; what was missing in the shutdown:
+  - Metal layer ownership (`MetalLayer.mm`, `MetalLayerHandle`): the handle released a layer it didn't own (copyable
+    class, temporary destructor) and never removed its view, so AppKit later drew a freed layer: the crash after
+    stopping, and the crash on quitting after a game ran. Now retained, move-only, view removed on the main thread.
+  - Sys area (`coreinit_MEM.cpp`): a bump allocator never rewound, so each launch leaked ~8 MB and the 4th ran out.
+    Rewound to the post-startup mark at ShutdownTitle; cached pointers into it cleared (Latte CP index array,
+    placeholder font, nn_uds workspace).
+  - AArch64 recompiler (`PPCRecompiler.cpp`): the instance data was re-reserved per title, but the AArch64 enter stub
+    is generated once with its address baked in, so later titles' code used the freed range. Now reserved once.
+  - Metal pipeline cache: async compile threads and cache loader/writer threads were detached and outlived the
+    renderer; now stopped and joined in `MetalRenderer::Shutdown` (after waiting for the GPU), pending requests
+    dropped; uninitialised members fixed.
+  - Shader compile queues (Metal and Vulkan): queued jobs and semaphore counts survived StopThreads, so the next
+    title's threads compiled freed shaders. Queue/semaphore cleared on stop; shaders unqueue themselves on delete.
+  - Latte (`LatteThread.cpp`): the decoded-index cache and in-flight texture readbacks held the old renderer's
+    objects; released/finished before the renderer shuts down.
+  - Graphic packs (`GraphicPack2*.cpp`, `rpl.cpp`): packs were never deactivated and their module list kept freed
+    modules, so a relaunch didn't re-apply patches; now deactivated at title end, module unloads notified, code caves
+    released.
+  - Test hook: `--test-stop-cycle CYCLES,SECONDS[,quit]` (launch with -g, stop after SECONDS, relaunch, CYCLES
+    times, then quit; `,quit` quits with the game running on the last cycle). For automated regression runs.
 
 ## Backlog (later)
 

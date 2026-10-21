@@ -40,6 +40,8 @@ static_assert(sizeof(MEMAllocator) == 0x10);
 
 MPTR coreinit_allocFromSysArea(uint32 size, uint32 alignment);
 void coreinit_freeToSysArea(MPTR mem);
+void coreinit_markSysAreaPersistentEnd(); // call once Cemu's persistent subsystems are initialized
+void coreinit_rewindSysAreaForTitleEnd(); // frees every sys area allocation made by the title (on shutdown)
 
 // mem exports
 void coreinitExport_MEMInitAllocatorForDefaultHeap(PPCInterpreter_t* hCPU);

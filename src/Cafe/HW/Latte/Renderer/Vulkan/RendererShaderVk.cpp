@@ -147,6 +147,14 @@ public:
 		for (auto& it : s_threads)
 			it.join();
 		s_threads.clear();
+
+		// Jobs still queued here belong to shaders that are deleted right after the renderer shuts down
+		// (LatteSHRC_UnloadAll). Drop them, and the semaphore counts they and the stop signals left: otherwise
+		// the threads of the next title pop freed shaders on start (heap corruption after stop -> relaunch)
+		s_compilationQueueMutex.lock();
+		s_compilationQueue.clear();
+		s_compilationQueueCount.reset();
+		s_compilationQueueMutex.unlock();
 	}
 
 	~_ShaderVkThreadPool()
@@ -209,6 +217,11 @@ RendererShaderVk::RendererShaderVk(ShaderType type, uint64 baseHash, uint64 auxH
 
 RendererShaderVk::~RendererShaderVk()
 {
+	// a shader deleted before a compile thread picked it up must not stay in the queue
+	ShaderVkThreadPool.s_compilationQueueMutex.lock();
+	if (m_compilationState.hasState(COMPILATION_STATE::QUEUED))
+		ShaderVkThreadPool.s_compilationQueue.erase(std::remove(ShaderVkThreadPool.s_compilationQueue.begin(), ShaderVkThreadPool.s_compilationQueue.end(), this), ShaderVkThreadPool.s_compilationQueue.end());
+	ShaderVkThreadPool.s_compilationQueueMutex.unlock();
 	while (!list_pipelineInfo.empty())
 		delete list_pipelineInfo[0];
 

@@ -7,16 +7,44 @@ MetalLayerHandle::MetalLayerHandle(MTL::Device* device, const Vector2i& size, bo
 {
     const auto& windowInfo = (mainWindow ? WindowSystem::GetWindowInfo().window_main : WindowSystem::GetWindowInfo().window_pad);
 
-    m_layer = (CA::MetalLayer*)CreateMetalLayer(windowInfo.surface, m_layerScaleX, m_layerScaleY);
+    m_layer = (CA::MetalLayer*)CreateMetalLayer(windowInfo.surface, m_layerScaleX, m_layerScaleY, &m_view);
     m_layer->setDevice(device);
     m_layer->setDrawableSize(CGSize{(float)size.x * m_layerScaleX, (float)size.y * m_layerScaleY});
     m_layer->setFramebufferOnly(true);
 }
 
+MetalLayerHandle::MetalLayerHandle(MetalLayerHandle&& other) noexcept
+{
+    *this = std::move(other);
+}
+
+MetalLayerHandle& MetalLayerHandle::operator=(MetalLayerHandle&& other) noexcept
+{
+    if (this != &other)
+    {
+        Release();
+        m_layer = std::exchange(other.m_layer, nullptr);
+        m_view = std::exchange(other.m_view, nullptr);
+        m_drawable = std::exchange(other.m_drawable, nullptr);
+        m_layerScaleX = other.m_layerScaleX;
+        m_layerScaleY = other.m_layerScaleY;
+    }
+    return *this;
+}
+
 MetalLayerHandle::~MetalLayerHandle()
 {
-    if (m_layer)
-        m_layer->release();
+    Release();
+}
+
+void MetalLayerHandle::Release()
+{
+    // the drawable is owned by the layer's pool; only drop our pointer
+    m_drawable = nullptr;
+    if (m_layer || m_view)
+        DestroyMetalLayer(m_layer, m_view);
+    m_layer = nullptr;
+    m_view = nullptr;
 }
 
 void MetalLayerHandle::Resize(const Vector2i& size)

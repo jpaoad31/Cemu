@@ -1803,6 +1803,8 @@ void RPLLoader_UnloadModule(RPLDependency* rplDependency, bool skipPPCCalls)
 	RPLLoader_decrementModuleDependencyRefs(rpl);
 	// save module config for this module in the debugger
 	g_debuggerDispatcher.NotifyModuleUnloaded(rpl);
+	// graphic packs keep a list of loaded modules to patch
+	GraphicPack2::NotifyModuleUnloaded(rpl);
 	// call rpl_entry with reason unload
 	if (!skipPPCCalls)
 	{

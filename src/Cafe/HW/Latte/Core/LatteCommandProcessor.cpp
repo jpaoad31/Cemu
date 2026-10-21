@@ -759,6 +759,12 @@ LatteCMDPtr LatteCP_itDrawIndexAuto(LatteCMDPtr cmd, uint32 nWords, DrawPassCont
 
 MPTR _tempIndexArrayMPTR = MPTR_NULL;
 
+// the array lives in the sys area, which is rewound when a title ends
+void LatteCP_ResetForTitleEnd()
+{
+	_tempIndexArrayMPTR = MPTR_NULL;
+}
+
 LatteCMDPtr LatteCP_itDrawImmediate(LatteCMDPtr cmd, uint32 nWords, DrawPassContext& drawPassCtx)
 {
 	uint32 count = LatteReadCMD();

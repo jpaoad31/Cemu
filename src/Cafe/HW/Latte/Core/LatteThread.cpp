@@ -246,8 +246,19 @@ bool Latte_GetStopSignal()
 	return !sLatteThreadRunning;
 }
 
+void LatteIndices_invalidateAll();
+void LatteTextureReadback_UpdateFinishedTransfers(bool forceFinish);
+
 void LatteThread_Exit()
 {
+	// finish texture readbacks in flight: their objects belong to this renderer and would otherwise be
+	// processed by the next title
+	if (g_renderer)
+		LatteTextureReadback_UpdateFinishedTransfers(true);
+	// the decoded index cache holds allocations of this renderer; give them back while it still exists
+	// (a later title would otherwise free them through its new renderer)
+	if (g_renderer)
+		LatteIndices_invalidateAll();
 	if (g_renderer)
 		g_renderer->Shutdown();
     // clean up vertex/uniform cache

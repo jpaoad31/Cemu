@@ -336,6 +336,11 @@ void MetalRenderer::Shutdown()
     // TODO: should shutdown both layers
     ImGui_ImplMetal_Shutdown();
     CommitCommandBuffer();
+    // let the GPU finish, and stop the pipeline compile/cache threads, before anything they use is freed
+    if (!m_executingCommandBuffers.empty())
+        m_executingCommandBuffers.back()->waitUntilCompleted();
+    if (m_pipelineCache)
+        m_pipelineCache->StopThreads();
     Renderer::Shutdown();
     RendererShaderMtl::Shutdown();
 }

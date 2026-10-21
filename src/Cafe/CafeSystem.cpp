@@ -433,6 +433,13 @@ void cemu_initForGame()
 	snd_core::AXOut_init();
 }
 
+// per-title state that lives in the sys area (see coreinit_rewindSysAreaForTitleEnd)
+void coreinit_markSysAreaPersistentEnd();
+void coreinit_rewindSysAreaForTitleEnd();
+void LatteCP_ResetForTitleEnd();
+void coreinit_ResetPlaceholderFontForTitleEnd();
+void nnUds_ResetForTitleEnd();
+
 namespace CafeSystem
 {
 	void InitVirtualMlcStorage();
@@ -644,6 +651,8 @@ namespace CafeSystem
 		iosu::odm::Initialize();
 		// init hardware register interfaces
 		HW_SI::Initialize();
+		// everything allocated from the sys area up to here is persistent; later allocations are per title
+		coreinit_markSysAreaPersistentEnd();
 	}
 
 	void SetImplementation(SystemImplementation* impl)
@@ -1086,6 +1095,11 @@ namespace CafeSystem
 		MlcStorageUnmountAllTitles();
 		UnmountBaseDirectories();
 		DestroyMemorySpace();
+		// free the title's sys area allocations and forget pointers cached into them
+		coreinit_rewindSysAreaForTitleEnd();
+		LatteCP_ResetForTitleEnd();
+		coreinit_ResetPlaceholderFontForTitleEnd();
+		nnUds_ResetForTitleEnd();
 		LaunchSettings::ClearCosArgstr();
 		sSystemRunning = false;
 	}
