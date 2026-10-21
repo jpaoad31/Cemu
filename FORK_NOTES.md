@@ -7,7 +7,8 @@ This fork supports the Wii Fit U decomp (`~/github/jpaoad31/wii-fit-u`) on macOS
 
 One commit per fix, so upstream candidates can be offered separately.
 Committed (on `wii-fit-u`, newest last): the memory range and the Balance Board (08026ec), H264 (0ff9865),
-the graphic-pack code overlay (ecbd4a0), `--dump-nus` (88006ec), the WUA conversion error (3cca1e1).
+the graphic-pack code overlay (ecbd4a0), `--dump-nus` (88006ec), the WUA conversion error (3cca1e1),
+the macOS camera (40e4ce9), Stop emulation and the shutdown fixes (1428abd).
 
 - **`SYSTEM_LIBS` memory range** (0x01000000-0x017FFFFF, readable). Wii Fit U reads past its
   two-entry pointing-device table (`jet::ui::UICore::Read`) into 0x011004xx. That range is mapped
@@ -42,7 +43,7 @@ the graphic-pack code overlay (ecbd4a0), `--dump-nus` (88006ec), the WUA convers
   - Permission: `NSCameraUsageDescription` in `MacOSXBundleInfo.plist.in`; asks on first CAMOpen,
     starts once granted, logs if denied.
 
-- **Stop emulation** (uncommitted): File -> "Stop emulation" (Cmd+.) in release builds (was debug-only, "unfinished -
+- **Stop emulation** (1428abd): File -> "Stop emulation" (Cmd+.) in release builds (was debug-only, "unfinished -
   crashes after repeated use"). Stop -> relaunch in one session now works; what was missing in the shutdown:
   - Metal layer ownership (`MetalLayer.mm`, `MetalLayerHandle`): the handle released a layer it didn't own (copyable
     class, temporary destructor) and never removed its view, so AppKit later drew a freed layer: the crash after
