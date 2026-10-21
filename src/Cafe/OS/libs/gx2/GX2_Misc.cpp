@@ -316,6 +316,9 @@ namespace GX2
 	    // wrote it there; Cemu holds tiled render targets on the host only, so finish the queued GPU work
 	    // and read the texture back into RAM first (see LatteAsyncCommands_queueCpuReadback)
 	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::CPU) && HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_COLOR_BUFFER) &&
+	        invalidationAddr != MPTR_NULL && invalidationSize != 0 && invalidationSize != 0xFFFFFFFFu && GX2GetDisplayListWriteStatus())
+	        cemuLog_log(LogType::TextureReadback, "[TextureReadback-CPU] skipped (display list being written) addr {:08x} size {:x}", memory_virtualToPhysical(invalidationAddr), invalidationSize);
+	    if (HAS_FLAG(invalidationFlags, GX2InvalidationFlag::CPU) && HAS_FLAG(invalidationFlags, GX2InvalidationFlag::GPU_COLOR_BUFFER) &&
 	        invalidationAddr != MPTR_NULL && invalidationSize != 0 && invalidationSize != 0xFFFFFFFFu && !GX2GetDisplayListWriteStatus())
 	    {
 	        GX2Command_Flush(0x100, true);

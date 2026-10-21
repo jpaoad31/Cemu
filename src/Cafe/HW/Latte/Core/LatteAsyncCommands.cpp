@@ -103,6 +103,16 @@ static void _LatteAsyncCommands_cpuReadback(MPTR physAddr)
 {
 	std::vector<LatteTexture*> textures;
 	LatteTC_LookupTexturesByPhysAddr(physAddr, textures);
+	if (cemuLog_isLoggingEnabled(LogType::TextureReadback))
+	{
+		for (LatteTexture* tex : textures)
+		{
+			LatteTextureSliceMipInfo* smi = tex->sliceMipInfo + tex->GetSliceMipArrayIndex(0, 0);
+			cemuLog_log(LogType::TextureReadback, "[TextureReadback-CPU] candidate {:08x} {}x{} pitch {} fmt {:04x} TM {} gpuWritten {} linear-mirrored {} lastDynamicUpdate {} lastCpuReadback {}", tex->physAddress, tex->width, tex->height, tex->pitch, (uint32)tex->format, (uint32)tex->tileMode, tex->isUpdatedOnGPU, tex->enableReadback, smi->lastDynamicUpdate, tex->lastCpuReadbackDynamicUpdate);
+		}
+		if (textures.empty())
+			cemuLog_log(LogType::TextureReadback, "[TextureReadback-CPU] no cached texture at {:08x}", physAddr);
+	}
 	for (LatteTexture* tex : textures)
 	{
 		if (!tex->isUpdatedOnGPU || tex->isDepth || tex->enableReadback) // linear ones are mirrored already
