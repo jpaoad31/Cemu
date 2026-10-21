@@ -6,7 +6,8 @@ This fork supports the Wii Fit U decomp (`~/github/jpaoad31/wii-fit-u`) on macOS
 ## Done
 
 One commit per fix, so upstream candidates can be offered separately.
-Committed: the memory range and the Balance Board (08026ec). Uncommitted until tested: the H264 fixes.
+Committed (on `wii-fit-u`, newest last): the memory range and the Balance Board (08026ec), H264 (0ff9865),
+the graphic-pack code overlay (ecbd4a0), `--dump-nus` (88006ec), the WUA conversion error (3cca1e1).
 
 - **`SYSTEM_LIBS` memory range** (0x01000000-0x017FFFFF, readable). Wii Fit U reads past its
   two-entry pointing-device table (`jet::ui::UICore::Read`) into 0x011004xx. That range is mapped
@@ -21,6 +22,14 @@ Committed: the memory range and the Balance Board (08026ec). Uncommitted until t
 - **H264, decode errors** (`H264DecBackendAVC.cpp`, `H264DecInternal.h`): a failed frame completes
   without output and `Execute` returns `BAD_STREAM`, so the game's own resync runs. The game used to
   hang briefly and show an untouched buffer. The log line now gives libavc's error code.
+- **Graphic-pack `code/` overlay** (`CafeSystem.cpp`, `GraphicPack2.*`): a pack's `code/Step.rpx` now
+  really replaces the RPX. Stock Cemu read the executable before registering pack files, and had a
+  leading slash in the redirect path. Upstream has the same bug.
+- **`--dump-nus <folder> -o <out>`:** decrypts a NUS title with Cemu's own code and the title's ticket.
+  It skips linked FST entries (an update's FST lists the base's unchanged files).
+- **Title Manager:** a failed WUA conversion shows an error instead of closing silently. The cause of
+  the v81 conversion failure is still unknown.
+- **Known, minor:** Cemu can crash (signal 11) on exit after a game ran ("Game info: Not running").
 
 ## Backlog (later)
 
