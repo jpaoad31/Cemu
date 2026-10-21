@@ -91,6 +91,7 @@ std::optional<int> LaunchSettings::HandleCommandline(const std::vector<std::wstr
 	po::options_description extractor{ "Extractor tool" };
 	extractor.add_options()
 		("extract,e", po::wvalue<std::wstring>(), "Path to WUD or WUX file for extraction")
+		("dump-nus", po::wvalue<std::wstring>(), "Path to a NUS title folder (title.tmd, title.tik, *.app) to decrypt in full into the --output folder")
 		("path,p", po::value<std::string>(), "Path of file to extract (for example meta/meta.xml)")
 		("output,o", po::wvalue<std::wstring>(), "Output path for extracted file.");
 	
@@ -264,6 +265,12 @@ std::optional<int> LaunchSettings::HandleCommandline(const std::vector<std::wstr
 		if(ppcRec_limitLowerAddr != 0 && ppcRec_limitUpperAddr != 0)
 			cemuLog_log(LogType::Force, "PPCRec range limited to 0x{:08x}-0x{:08x}", ppcRec_limitLowerAddr, ppcRec_limitUpperAddr);
 
+		if (vm.count("dump-nus"))
+		{
+			bool ok = DumpNUSTool(vm["dump-nus"].as<std::wstring>(), log_path);
+			return ok ? 0 : 1;
+		}
+
 		if(!extract_path.empty())
 		{
 			ExtractorTool(extract_path, output_path, log_path);
@@ -343,4 +350,85 @@ bool LaunchSettings::ExtractorTool(std::wstring_view wud_path, std::string_view 
 	}
 	
 	return true;
+}
+
+// decrypts a NUS title folder (title.tmd, title.tik and the .app contents) into a plain code/content/meta folder
+bool LaunchSettings::DumpNUSTool(std::wstring_view nus_path, std::wstring_view output_path)
+{
+	requireConsole();
+	if (output_path.empty())
+	{
+		puts("--dump-nus needs an output folder (-o)");
+		return false;
+	}
+	AES128_init();
+	FSTVolume::ErrorCode err = FSTVolume::ErrorCode::OK;
+	FSTVolume* vol = FSTVolume::OpenFromContentFolder(fs::path(nus_path), &err);
+	if (!vol)
+	{
+		printf("Unable to open NUS folder (error %d)\n", (int)err);
+		return false;
+	}
+	fs::path outRoot{std::wstring(output_path)};
+	uint64 totalBytes = 0;
+	uint32 totalFiles = 0;
+	uint32 linkedEntries = 0;
+	bool ok = true;
+	std::vector<uint8> buf(1024 * 1024);
+	std::function<void(const std::string&)> walk = [&](const std::string& dir) {
+		FSTDirectoryIterator it;
+		if (!vol->OpenDirectoryIterator(dir, it))
+		{
+			printf("Cannot open directory %s\n", dir.c_str());
+			ok = false;
+			return;
+		}
+		FSTFileHandle fh;
+		while (vol->Next(it, fh))
+		{
+			std::string name(vol->GetName(fh));
+			std::string path = dir.empty() ? name : dir + "/" + name;
+			// entries with the link flag aren't stored in this title (an update lists the base title's
+			// unchanged files this way). The mount skips them (fscDeviceWud.cpp), so the base's copy is
+			// used; reading them here gives another file's bytes
+			if (vol->HasLinkFlag(fh))
+			{
+				linkedEntries++;
+				continue;
+			}
+			if (vol->IsDirectory(fh))
+			{
+				fs::create_directories(outRoot / path);
+				walk(path);
+				continue;
+			}
+			uint32 size = vol->GetFileSize(fh);
+			fs::create_directories((outRoot / path).parent_path());
+			std::ofstream f(outRoot / path, std::ios::binary);
+			for (uint32 off = 0; off < size;)
+			{
+				uint32 n = std::min<uint32>((uint32)buf.size(), size - off);
+				uint32 r = vol->ReadFile(fh, off, n, buf.data());
+				if (r != n)
+				{
+					printf("Short read in %s at %u\n", path.c_str(), off);
+					ok = false;
+					break;
+				}
+				f.write((const char*)buf.data(), n);
+				off += n;
+			}
+			totalBytes += size;
+			totalFiles++;
+		}
+	};
+	walk("");
+	if (vol->HasCorruption())
+	{
+		puts("Warning: hash check failed for some content (corruption detected)");
+		ok = false;
+	}
+	delete vol;
+	printf("Dumped %u files, %llu bytes to %s (%u linked entries skipped: they come from the base title)\n", totalFiles, (unsigned long long)totalBytes, outRoot.generic_string().c_str(), linkedEntries);
+	return ok;
 }

@@ -70,4 +70,5 @@ private:
 	inline static uint32 ppcRec_limitUpperAddr{};
 
 	static bool ExtractorTool(std::wstring_view wud_path, std::string_view output_path, std::wstring_view log_path);
+	static bool DumpNUSTool(std::wstring_view nus_path, std::wstring_view output_path);
 };
