@@ -33,6 +33,7 @@ void wxCemuConfig::Load(XMLConfigParser& parser)
 	check_update = parser.get("check_update", check_update);
 	receive_untested_updates = parser.get("receive_untested_updates", receive_untested_updates);
 	save_screenshot = parser.get("save_screenshot", save_screenshot);
+	expand_graphic_packs = parser.get("expand_graphic_packs", expand_graphic_packs);
 	did_show_vulkan_warning = parser.get("vk_warning", did_show_vulkan_warning);
 	did_show_graphic_pack_download = parser.get("gp_download", did_show_graphic_pack_download);
 	did_show_macos_disclaimer = parser.get("macos_disclaimer", did_show_macos_disclaimer);
@@ -132,6 +133,7 @@ void wxCemuConfig::Save(XMLConfigParser& config)
 	config.set<bool>("check_update", check_update);
 	config.set<bool>("receive_untested_updates", receive_untested_updates);
 	config.set<bool>("save_screenshot", save_screenshot);
+	config.set<bool>("expand_graphic_packs", expand_graphic_packs);
 	config.set<bool>("vk_warning", did_show_vulkan_warning);
 	config.set<bool>("gp_download", did_show_graphic_pack_download);
 	config.set<bool>("macos_disclaimer", did_show_macos_disclaimer);

@@ -32,6 +32,7 @@ private:
 	void UpdateOptionsLayout();
 	void ClearPresets();
 	void FillGraphicPackList() const;
+	void FillGraphicPackTree() const;
 	void GetChildren(const wxTreeItemId& id, std::vector<wxTreeItemId>& children) const;
 	void ExpandChildren(const std::vector<wxTreeItemId>& ids, size_t& counter) const;
 	

@@ -1,6 +1,7 @@
 #include "helpers/wxHelpers.h"
 #include "wxgui/wxgui.h"
 #include "wxgui/GraphicPacksWindow2.h"
+#include "wxgui/wxCemuConfig.h"
 #include "wxgui/DownloadGraphicPacksWindow.h"
 #include "wxgui/DownloadCustomGraphicPackWindow.h"
 #include "Cafe/GraphicPack/GraphicPack2.h"
@@ -32,6 +33,23 @@ private:
 };
 
 void GraphicPacksWindow2::FillGraphicPackList() const
+{
+	FillGraphicPackTree();
+
+	// after the tree is filled and the update locker is released
+	if (GetWxGUIConfig().expand_graphic_packs)
+	{
+		std::vector<wxTreeItemId> folders;
+		GetChildren(m_graphic_pack_tree->GetRootItem(), folders);
+		for (const auto& folder : folders)
+		{
+			if (m_graphic_pack_tree->HasChildren(folder))
+				m_graphic_pack_tree->ExpandAllChildren(folder);
+		}
+	}
+}
+
+void GraphicPacksWindow2::FillGraphicPackTree() const
 {
 	wxWindowUpdateLocker lock(m_graphic_pack_tree);
 

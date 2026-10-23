@@ -97,6 +97,7 @@ struct wxCemuConfig
 	ConfigValue<bool> check_update{true};
 	ConfigValue<bool> receive_untested_updates{false};
 	ConfigValue<bool> save_screenshot{true};
+	ConfigValue<bool> expand_graphic_packs{false};
 
 	ConfigValue<bool> did_show_vulkan_warning{false};
 	ConfigValue<bool> did_show_graphic_pack_download{false}; // no longer used but we keep the config value around in case people downgrade Cemu. Despite the name this was used for the Getting Started dialog

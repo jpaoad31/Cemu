@@ -234,6 +234,11 @@ wxPanel* GeneralSettings2::AddGeneralPage(wxNotebook* notebook)
 			third_row->Add(m_save_screenshot, 0, botflag, 5);
 			CountRowElement();
 
+			m_expand_graphic_packs = new wxCheckBox(box, wxID_ANY, _("Always expand all graphic packs"));
+			m_expand_graphic_packs->SetToolTip(_("Expand every folder in the graphic packs window whenever its list is shown"));
+			third_row->Add(m_expand_graphic_packs, 0, botflag, 5);
+			CountRowElement();
+
 			m_disable_screensaver = new wxCheckBox(box, wxID_ANY, _("Disable screen saver"));
 			m_disable_screensaver->SetToolTip(_("Prevents the system from activating the screen saver or going to sleep while running a game."));
 			third_row->Add(m_disable_screensaver, 0, botflag, 5);
@@ -1125,6 +1130,7 @@ void GeneralSettings2::StoreConfig()
 	wxGuiConfig.fullscreen_menubar = m_fullscreen_menubar->IsChecked();
 	wxGuiConfig.check_update = m_auto_update->IsChecked();
 	wxGuiConfig.save_screenshot = m_save_screenshot->IsChecked();
+	wxGuiConfig.expand_graphic_packs = m_expand_graphic_packs->IsChecked();
 	wxGuiConfig.receive_untested_updates = m_receive_untested_releases->IsChecked();
 #if BOOST_OS_LINUX && defined(ENABLE_FERAL_GAMEMODE)
     wxGuiConfig.feral_gamemode = m_feral_gamemode->IsChecked();
@@ -1890,6 +1896,7 @@ void GeneralSettings2::ApplyConfig()
 	m_auto_update->SetValue(wxGUIconfig.check_update);
 	m_receive_untested_releases->SetValue(wxGUIconfig.receive_untested_updates);
 	m_save_screenshot->SetValue(wxGUIconfig.save_screenshot);
+	m_expand_graphic_packs->SetValue(wxGUIconfig.expand_graphic_packs);
 
 	m_disable_screensaver->SetValue(config.disable_screensaver);
 	m_play_boot_sound->SetValue(config.play_boot_sound);
