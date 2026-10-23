@@ -10,6 +10,7 @@
 #include "Cafe/OS/libs/coreinit/coreinit_Time.h"
 #include "Cafe/OS/libs/vpad/vpad.h"
 #include "OS/libs/coreinit/coreinit_DynLoad.h"
+#include "WindowSystem.h"
 
 namespace nn
 {
@@ -152,12 +153,12 @@ namespace erreula
 
 		bool IsDecideSelectLeftButtonError() const
 		{
-			return m_buttonSelection != BUTTON_SELECTION::LEFT;
+			return m_buttonSelection == BUTTON_SELECTION::LEFT;
 		}
 
 		bool IsDecideSelectRightButtonError() const
 		{
-			return m_buttonSelection != BUTTON_SELECTION::RIGHT;
+			return m_buttonSelection == BUTTON_SELECTION::RIGHT;
 		}
 
 		void SetButtonSelection(BUTTON_SELECTION selection)
@@ -231,18 +232,90 @@ namespace erreula
 		bool homeNixSignVisible{false};
 	} g_errEula = {};
 	
-	std::wstring GetText(uint16be* text)
+	// number of selectable buttons of the dialog (Code and Text dialogs have a single OK button)
+	sint32 GetDialogButtonCount(const AppearError& arg)
 	{
-		std::wstringstream result;
-		while(*text != 0)
-		{
-			auto c = (uint16)*text;
-			result << static_cast<wchar_t>(c);
-			text++;
-		}
-
-		return result.str();
+		return arg.errorType == ErrorDialogType::TextTwoButton ? 2 : 1;
 	}
+
+	// Game text for ImGui: skips message tags (0x000E group type size params, as in MSBT strings; the params may
+	// contain zero code units, so they are skipped by size instead of ending the string), maps the known
+	// Nintendo private-use button glyphs to readable text and drops other control characters.
+	std::string GetDisplayText(const uint16be* text)
+	{
+		std::string result;
+		if (!text)
+			return result;
+		std::wstring chunk;
+		auto flush = [&]() {
+			if (!chunk.empty())
+				result += boost::nowide::narrow(chunk);
+			chunk.clear();
+		};
+		for (sint32 i = 0; i < 0x1000; i++)
+		{
+			const uint16 c = (uint16)text[i];
+			if (c == 0)
+				break;
+			if (c == 0x000E)
+			{
+				// tag: group, type, parameter size in bytes, parameters
+				const uint16 paramSize = (uint16)text[i + 3];
+				i += 3 + (paramSize + 1) / 2;
+				continue;
+			}
+			if (c == 0x000F)
+			{
+				// end-of-tag marker: group, type
+				i += 2;
+				continue;
+			}
+			const char* glyphName = nullptr;
+			switch (c)
+			{
+			case 0xE000: glyphName = "(A)"; break;
+			case 0xE001: glyphName = "(B)"; break;
+			case 0xE002: glyphName = "(X)"; break;
+			case 0xE003: glyphName = "(Y)"; break;
+			case 0xE004: glyphName = "(L)"; break;
+			case 0xE005: glyphName = "(R)"; break;
+			default: break;
+			}
+			if (glyphName)
+			{
+				flush();
+				result += glyphName;
+				continue;
+			}
+			if (c >= 0xE000 && c <= 0xF8FF)
+				continue; // other private-use glyphs, the ImGui font has none
+			if (c < 0x20 && c != '\n')
+				continue;
+			chunk += static_cast<wchar_t>(c);
+		}
+		flush();
+		return result;
+	}
+
+	// GetDisplayText, or fallback if the text is missing or has nothing visible
+	std::string GetDisplayTextOr(const MEMPTR<uint16be>& text, const char* fallback)
+	{
+		std::string result = text ? GetDisplayText(text.GetPtr()) : std::string();
+		if (result.find_first_not_of(" \t\n") == std::string::npos)
+			return fallback;
+		return result;
+	}
+
+	std::string DumpText(const MEMPTR<uint16be>& text)
+	{
+		if (!text)
+			return "null";
+		std::string result;
+		for (sint32 i = 0; i < 64 && (uint16)text.GetPtr()[i] != 0; i++)
+			result += fmt::format("{:04x} ", (uint16)text.GetPtr()[i]);
+		return result;
+	}
+
 	
 
 	void ErrEulaCreate(void* workmem, uint32 regionType, uint32 langType, coreinit::FSClient_t* fsClient)
@@ -311,6 +384,7 @@ namespace erreula
 	void ErrEulaAppearError(AppearArg* arg)
 	{
 		g_errEula.currentDialog = *arg;
+		cemuLog_log(LogType::Force, "ErrEulaAppearError: type {} code {} button1 [{}] button2 [{}]", (uint32)arg->errorType.value(), (uint32)arg->errorCode, DumpText(arg->button1Text), DumpText(arg->button2Text));
 		if(g_errEula.errEulaInstance)
 			g_errEula.errEulaInstance->DoAppearError(arg);
 	}
@@ -346,10 +420,76 @@ namespace erreula
 		osLib_returnFromFunction(hCPU, 0);
 	}
 
+	sint32 ErrEulaGetSelectButtonNumError()
+	{
+		if(!g_errEula.errEulaInstance || g_errEula.errEulaInstance->GetState() == ErrEulaState::Hidden)
+			return 0;
+		return GetDialogButtonCount(g_errEula.currentDialog);
+	}
+
+	void ErrEulaSetControllerRemo(uint32 controllerType)
+	{
+		// selects which controller drives the pointer cursor; our dialog has no cursor
+	}
+
+	bool ErrEulaIsSelectCursorActive()
+	{
+		return false;
+	}
+
+	void ErrEulaDrawTV()
+	{
+		// drawn by the ImGui overlay (render())
+	}
+
+	void ErrEulaDrawDRC()
+	{
+	}
+
+	// Button confirmation from the controllers the game hands to ErrEulaCalc, like the real applet: GamePad or
+	// Wii Remote A picks the left/only button, B the right one. Enter/Space on the keyboard pick the left one.
+	void ErrEulaHandleControllerInput(ControllerInfo_t* controllerInfo)
+	{
+		static bool s_keyWasDown = true;
+		const bool keyDown = WindowSystem::IsKeyDown(WindowSystem::PlatformKeyCodes::RETURN) || WindowSystem::IsKeyDown(WindowSystem::PlatformKeyCodes::SPACE);
+		const bool keyPressed = keyDown && !s_keyWasDown;
+		s_keyWasDown = keyDown;
+
+		auto& instance = *g_errEula.errEulaInstance;
+		if (instance.GetState() != ErrEulaState::Visible || instance.IsDecideSelectButtonError())
+			return;
+
+		constexpr uint32 kVpadA = 0x8000, kVpadB = 0x4000;
+		constexpr uint32 kWpadA = 0x0800, kWpadB = 0x0400;
+		bool pressedA = keyPressed, pressedB = false;
+		if (controllerInfo)
+		{
+			if (VPADStatus_t* vpad = controllerInfo->vpadStatus.GetPtr())
+			{
+				pressedA |= (vpad->trig & kVpadA) != 0;
+				pressedB |= (vpad->trig & kVpadB) != 0;
+			}
+			for (auto& kpadPtr : controllerInfo->kpadStatus)
+			{
+				if (KPADStatus_t* kpad = kpadPtr.GetPtr())
+				{
+					pressedA |= (kpad->trig & kWpadA) != 0;
+					pressedB |= (kpad->trig & kWpadB) != 0;
+				}
+			}
+		}
+		if (pressedA)
+			instance.SetButtonSelection(ErrEulaInstance::BUTTON_SELECTION::LEFT);
+		else if (pressedB && GetDialogButtonCount(g_errEula.currentDialog) == 2)
+			instance.SetButtonSelection(ErrEulaInstance::BUTTON_SELECTION::RIGHT);
+	}
+
 	void ErrEulaCalc(ControllerInfo_t* controllerInfo)
 	{
-		if(g_errEula.errEulaInstance)
-			g_errEula.errEulaInstance->DoCalc();
+		if(!g_errEula.errEulaInstance)
+			return;
+		g_errEula.errEulaInstance->DoCalc();
+		ErrEulaHandleControllerInput(controllerInfo);
 	}
 
 	void render(bool mainWindow)
@@ -382,8 +522,7 @@ namespace erreula
 		ImGui::PushFont(font);
 
 		std::string title;
-		if (appearArg.title)
-			title = boost::nowide::narrow(GetText(appearArg.title.GetPtr()));
+		title = GetDisplayTextOr(appearArg.title, "");
 		if (title.empty()) // ImGui doesn't allow empty titles, so set one if appearArg.title is not set or empty
 			title = "ErrEula";
 
@@ -414,9 +553,7 @@ namespace erreula
 			}
 			case ErrorDialogType::Text:
 			{
-				std::string txtTmp = "Unknown Error";
-				if (appearArg.text)
-					txtTmp = boost::nowide::narrow(GetText(appearArg.text.GetPtr()));
+				std::string txtTmp = GetDisplayTextOr(appearArg.text, "Unknown Error");
 
 				text += txtTmp;
 				ImGui::TextUnformatted(text.c_str(), text.c_str() + text.size());
@@ -428,17 +565,13 @@ namespace erreula
 			}
 			case ErrorDialogType::TextOneButton:
 			{
-				std::string txtTmp = "Unknown Error";
-				if (appearArg.text)
-					txtTmp = boost::nowide::narrow(GetText(appearArg.text.GetPtr()));
+				std::string txtTmp = GetDisplayTextOr(appearArg.text, "Unknown Error");
 
 				text += txtTmp;
 				ImGui::TextUnformatted(text.c_str(), text.c_str() + text.size());
 				ImGui::Spacing();
 
-				std::string button1 = "Yes";
-				if (appearArg.button1Text)
-					button1 = boost::nowide::narrow(GetText(appearArg.button1Text.GetPtr()));
+				std::string button1 = GetDisplayTextOr(appearArg.button1Text, "OK");
 
 				float width = std::max(100.0f, ImGui::CalcTextSize(button1.c_str()).x + 10.0f);
 				ImGui::SetCursorPosX(startx - (width / 2.0f));
@@ -447,20 +580,14 @@ namespace erreula
 			}
 			case ErrorDialogType::TextTwoButton:
 			{
-				std::string txtTmp = "Unknown Error";
-				if (appearArg.text)
-					txtTmp = boost::nowide::narrow(GetText(appearArg.text.GetPtr()));
+				std::string txtTmp = GetDisplayTextOr(appearArg.text, "Unknown Error");
 
 				text += txtTmp;
 				ImGui::TextUnformatted(text.c_str(), text.c_str() + text.size());
 				ImGui::Spacing();
 
-				std::string button1 = "Yes";
-				if (appearArg.button1Text)
-					button1 = boost::nowide::narrow(GetText(appearArg.button1Text.GetPtr()));
-				std::string button2 = "No";
-				if (appearArg.button2Text)
-					button2 = boost::nowide::narrow(GetText(appearArg.button2Text.GetPtr()));
+				std::string button1 = GetDisplayTextOr(appearArg.button1Text, "Yes");
+				std::string button2 = GetDisplayTextOr(appearArg.button2Text, "No");
 
 				float width1 = std::max(100.0f, ImGui::CalcTextSize(button1.c_str()).x + 10.0f);
 				float width2 = std::max(100.0f, ImGui::CalcTextSize(button2.c_str()).x + 10.0f);
@@ -511,6 +638,11 @@ namespace erreula
 			cafeExportRegisterFunc(ErrEulaGetStateErrorViewer, "erreula", "ErrEulaGetStateErrorViewer__3RplFv", LogType::Placeholder);
 
 			cafeExportRegisterFunc(ErrEulaCalc, "erreula", "ErrEulaCalc__3RplFRCQ3_2nn7erreula14ControllerInfo", LogType::Placeholder);
+			cafeExportRegisterFunc(ErrEulaGetSelectButtonNumError, "erreula", "ErrEulaGetSelectButtonNumError__3RplFv", LogType::Placeholder);
+			cafeExportRegisterFunc(ErrEulaSetControllerRemo, "erreula", "ErrEulaSetControllerRemo__3RplFQ3_2nn7erreula14ControllerType", LogType::Placeholder);
+			cafeExportRegisterFunc(ErrEulaIsSelectCursorActive, "erreula", "ErrEulaIsSelectCursorActive__3RplFv", LogType::Placeholder);
+			cafeExportRegisterFunc(ErrEulaDrawTV, "erreula", "ErrEulaDrawTV__3RplFv", LogType::Placeholder);
+			cafeExportRegisterFunc(ErrEulaDrawDRC, "erreula", "ErrEulaDrawDRC__3RplFv", LogType::Placeholder);
 
 			osLib_addFunction("erreula", "ErrEulaAppearHomeNixSign__3RplFRCQ3_2nn7erreula14HomeNixSignArg", export_AppearHomeNixSign);
 			osLib_addFunction("erreula", "ErrEulaChangeLang__3RplFQ3_2nn7erreula8LangType", export_ChangeLang);

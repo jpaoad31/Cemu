@@ -234,6 +234,12 @@ bool WindowSystem::IsKeyDown(PlatformKeyCodes platformKey)
 	case PlatformKeyCodes::ESCAPE:
 		key = VK_ESCAPE;
 		break;
+	case PlatformKeyCodes::RETURN:
+		key = VK_RETURN;
+		break;
+	case PlatformKeyCodes::SPACE:
+		key = VK_SPACE;
+		break;
 #elif BOOST_OS_LINUX || BOOST_OS_BSD
 	case PlatformKeyCodes::LCONTROL:
 		key = GDK_KEY_Control_L;
@@ -247,6 +253,12 @@ bool WindowSystem::IsKeyDown(PlatformKeyCodes platformKey)
 	case PlatformKeyCodes::ESCAPE:
 		key = GDK_KEY_Escape;
 		break;
+	case PlatformKeyCodes::RETURN:
+		key = GDK_KEY_Return;
+		break;
+	case PlatformKeyCodes::SPACE:
+		key = GDK_KEY_space;
+		break;
 #elif BOOST_OS_MACOS
 	case PlatformKeyCodes::LCONTROL:
 		key = kVK_Control;
@@ -259,6 +271,12 @@ bool WindowSystem::IsKeyDown(PlatformKeyCodes platformKey)
 		break;
 	case PlatformKeyCodes::ESCAPE:
 		key = kVK_Escape;
+		break;
+	case PlatformKeyCodes::RETURN:
+		key = kVK_Return;
+		break;
+	case PlatformKeyCodes::SPACE:
+		key = kVK_Space;
 		break;
 #endif
 	default:

@@ -23,6 +23,8 @@ namespace WindowSystem
 		RCONTROL,
 		TAB,
 		ESCAPE,
+		RETURN,
+		SPACE,
 	};
 
 	struct WindowInfo
