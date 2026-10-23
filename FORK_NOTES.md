@@ -98,6 +98,25 @@ the macOS camera (40e4ce9), Stop emulation and the shutdown fixes (1428abd).
   overwrites memory, so the earlier CPU write no longer counts. Found with the gated `[TextureReadback-CPU]`
   diagnostics (GX2_Misc.cpp skipped-in-display-list line, LatteAsyncCommands.cpp per-candidate lines; Texture
   readback logging only).
+- **Always expand all graphic packs** (committed; `GraphicPacksWindow2.*`, `GeneralSettings2.*`, `wxCemuConfig.*`): General settings checkbox, off by default; every folder in the graphic packs tree is expanded whenever the list is built (open, filter, reload).
+- **ErrEula dialog can be confirmed** (committed; `erreula.cpp`, `WindowSystem.h`, `wxWindowSystem.cpp`): Wii Fit U's ErrorViewer only checks the buttons when `ErrEulaGetSelectButtonNumError` > 0, which Cemu didn't export (unsupported stub returned 0), so clicks were ignored; added it (plus no-op SetControllerRemo/IsSelectCursorActive/DrawTV/DrawDRC), fixed the inverted IsDecideSelectLeft/RightButtonError, GamePad/Wii Remote A (left/only) and B (right) via the ControllerInfo given to ErrEulaCalc, Enter/Space; labels skip MSBT tags, map PUA E000-E005 to (A)/(B)/(X)/(Y)/(L)/(R), fall back to OK; each AppearError logs the raw button text.
+
+## Upstream (Cemu's AI policy)
+
+Cemu's CONTRIBUTING.md (checked 2026-10-22): code from new contributors must be written and understood by a
+human; AI is fine for planning, design, review and questions about the codebase, not for writing the code (not
+even paraphrased). Reasons given: low review capacity, AI fixes that "work on the surface" but aren't accurate
+emulation, and LLMs possibly trained on leaked SDKs. So nothing here goes upstream as a PR. What fits: detailed
+bug reports (welcome per CONTRIBUTING.md; our commit messages are written that way), or the user writing a fix
+themselves from our notes. Best candidates for reports: H264 multi-slice, graphic-pack code overlay, CPU readback
+of tiled render targets, the clear undone by a stale reload, the unmapped 0x01000000 range, the shutdown bugs
+behind "Close game".
+
+**Plan (user, 2026-10-22):** at the end of the project, file a batch of detailed issues upstream (one per general bug,
+with cause, evidence and repro), and make this fork public as a reference with all the fixes, stated clearly as
+AI-written so maintainers can treat it as background, not as a PR. Keep commits one-per-fix with full messages, so
+each issue can point at its commit. Check the licence terms (Cemu is MPL-2.0) and the original authors' notices when
+publishing.
 
 ## Backlog (later)
 
