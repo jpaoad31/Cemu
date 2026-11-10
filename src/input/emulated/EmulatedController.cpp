@@ -77,6 +77,15 @@ void EmulatedController::controllers_update_states()
 	}
 }
 
+void EmulatedController::controllers_read_done()
+{
+	std::shared_lock lock(m_mutex);
+	for (const auto& controller : m_controllers)
+	{
+		controller->on_emulated_read_done();
+	}
+}
+
 void EmulatedController::start_rumble()
 {
 	m_rumble = true;

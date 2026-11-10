@@ -48,6 +48,7 @@ public:
 	void connect();
 	virtual void update();
 	void controllers_update_states();
+	void controllers_read_done();
 
 	virtual glm::vec2 get_axis() const = 0;
 	virtual glm::vec2 get_rotation() const = 0;

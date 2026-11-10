@@ -33,6 +33,8 @@ private:
 	bool has_settings(InputAPI::Type type);
 	ControllerPage& get_current_page_data() const;
 	void update_state();
+	void update_remote_gamepad_status();
+	uint32 m_remote_status_tick = 0;
 
 	boost::signals2::connection m_controller_changed;
 	void on_controller_changed();

@@ -12,6 +12,7 @@
 class wxComboBox;
 class wxChoice;
 class wxTextCtrl;
+class wxStaticText;
 
 using wxAPIType = wxCustomData<InputAPI::Type>;
 
@@ -47,6 +48,7 @@ private:
 
 	wxPanel* m_settings_panel;
 	wxTextCtrl* m_ip, * m_port;
+	wxStaticText* m_ip_label;
 
 	std::optional<InputAPI::Type> m_type;
 	std::shared_ptr<ControllerBase> m_controller;

@@ -15,6 +15,7 @@
 #include <wx/wupdlock.h>
 
 #include "input/ControllerFactory.h"
+#include "input/api/RemoteGamePad/RemoteGamePadControllerProvider.h"
 
 wxDEFINE_EVENT(wxControllersRefreshed, wxCommandEvent);
 
@@ -88,8 +89,9 @@ InputAPIAddWindow::InputAPIAddWindow(wxWindow* parent, const wxPoint& position,
 
 		{
 			auto* row = new wxBoxSizer(wxHORIZONTAL);
-			// we only have dsu settings atm, so add elements now
-			row->Add(new wxStaticText(m_settings_panel, wxID_ANY, _("IP")), 0, wxALIGN_CENTER_VERTICAL | wxALL, 5);
+			// DSU: IP and port; Remote GamePad: port only (the IP row is hidden)
+			m_ip_label = new wxStaticText(m_settings_panel, wxID_ANY, _("IP"));
+			row->Add(m_ip_label, 0, wxALIGN_CENTER_VERTICAL | wxALL, 5);
 			m_ip = new wxTextCtrl(m_settings_panel, wxID_ANY, "127.0.0.1");
 			row->Add(m_ip, 0, wxALL, 5);
 
@@ -150,13 +152,27 @@ void InputAPIAddWindow::on_close_button(wxCommandEvent& event)
 bool InputAPIAddWindow::has_custom_settings() const
 {
 	const auto selection = m_input_api->GetStringSelection();
-	return selection == wxString::FromUTF8(to_string(InputAPI::DSUClient));
+	return selection == wxString::FromUTF8(to_string(InputAPI::DSUClient)) ||
+		selection == wxString::FromUTF8(to_string(InputAPI::RemoteGamePad));
 }
 
 std::unique_ptr<ControllerProviderSettings> InputAPIAddWindow::get_settings() const
 {
 	if (!has_custom_settings())
 		return {};
+
+	if (m_input_api->GetStringSelection() == wxString::FromUTF8(to_string(InputAPI::RemoteGamePad)))
+	{
+		uint16 port = RemoteGamePad::kDefaultPort;
+		try
+		{
+			port = ConvertString<uint16>(m_port->GetValue().ToStdString());
+		}
+		catch (const std::exception&)
+		{
+		}
+		return std::make_unique<RemoteGamePadProviderSettings>(port);
+	}
 
 	return std::make_unique<DSUProviderSettings>(m_ip->GetValue().ToStdString(),
 	                                             ConvertString<uint16>(m_port->GetValue().ToStdString()));
@@ -200,7 +216,23 @@ void InputAPIAddWindow::on_api_selected(wxCommandEvent& event)
     }
 
 	const auto show_settings = has_custom_settings();
-	// dsu has special settings for ip/port
+	if (show_settings)
+	{
+		// Remote GamePad listens on a port (no IP); DSU connects to IP:port
+		const bool remote = selection == wxString::FromUTF8(to_string(InputAPI::RemoteGamePad));
+		const auto dsu_port = wxString::Format("%d", 26760);
+		const auto remote_port = wxString::Format("%d", (int)RemoteGamePad::kDefaultPort);
+		if (remote && m_port->GetValue() == dsu_port)
+			m_port->SetValue(remote_port);
+		else if (!remote && m_port->GetValue() == remote_port)
+			m_port->SetValue(dsu_port);
+		m_ip->Show(!remote);
+		m_ip_label->Show(!remote);
+		m_settings_panel->Layout();
+		Layout();
+		Fit();
+	}
+	// dsu and remote gamepad have special settings for ip/port
 	if (show_settings != m_settings_panel->IsShown())
 	{
 		wxWindowUpdateLocker locker(this);

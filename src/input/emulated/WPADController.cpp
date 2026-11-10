@@ -182,6 +182,9 @@ void WPADController::WPADRead(WPADStatus_t* status)
 
 	status->dev = get_device_type();
 	status->err = WPAD_ERR_NONE;
+
+	// this read has seen the controllers' latched presses (Remote GamePad)
+	controllers_read_done();
 }
 
 void WPADController::KPADRead(KPADStatus_t& status, const BtnRepeat& repeat)
@@ -389,4 +392,7 @@ void WPADController::KPADRead(KPADStatus_t& status, const BtnRepeat& repeat)
 	}
 
 	
+
+	// this read has seen the controllers' latched presses (Remote GamePad)
+	controllers_read_done();
 }

@@ -43,6 +43,9 @@ the macOS camera (40e4ce9), Stop emulation and the shutdown fixes (1428abd).
   - Permission: `NSCameraUsageDescription` in `MacOSXBundleInfo.plist.in`; asks on first CAMOpen,
     starts once granted, logs if denied.
 
+- **Remote GamePad** (branch `remote-gamepad`, uncommitted until tested): new input API "RemoteGamePad": an iPhone app
+  (`~/github/jpaoad31/wiiu-gamepad-remote`) sends GamePad buttons, sticks, touch and motion over UDP 26770. See `REMOTE_GAMEPAD.md`.
+
 - **Stop emulation** (1428abd): File -> "Stop emulation" (Cmd+.) in release builds (was debug-only, "unfinished -
   crashes after repeated use"). Stop -> relaunch in one session now works; what was missing in the shutdown:
   - Metal layer ownership (`MetalLayer.mm`, `MetalLayerHandle`): the handle released a layer it didn't own (copyable

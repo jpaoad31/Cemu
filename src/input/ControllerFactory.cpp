@@ -9,6 +9,7 @@
 #include "input/api/Keyboard/KeyboardController.h"
 #include "input/api/DSU/DSUController.h"
 #include "input/api/GameCube/GameCubeController.h"
+#include "input/api/RemoteGamePad/RemoteGamePadController.h"
 
 #if BOOST_OS_WINDOWS
 #include "input/api/XInput/XInputController.h"
@@ -85,6 +86,16 @@ ControllerPtr ControllerFactory::CreateController(InputAPI::Type api, std::strin
 		{
 			const auto index = ConvertString<uint32>(uuid);
 			return std::make_shared<DSUController>(index);
+		}
+#endif
+#if HAS_REMOTE_GAMEPAD
+	case InputAPI::RemoteGamePad:
+		{
+			// uuid is the UDP port
+			RemoteGamePadProviderSettings settings;
+			if (!uuid.empty())
+				settings.port = ConvertString<uint16>(uuid);
+			return std::make_shared<RemoteGamePadController>(settings);
 		}
 #endif
 #if defined(HAS_GAMECUBE) && HAS_GAMECUBE && defined(HAS_LIBUSB)
@@ -170,6 +181,14 @@ ControllerProviderPtr ControllerFactory::CreateControllerProvider(InputAPI::Type
 			}
 		}
 
+#endif
+#if HAS_REMOTE_GAMEPAD
+	case InputAPI::RemoteGamePad:
+		{
+			if (const auto* rg = dynamic_cast<const RemoteGamePadProviderSettings*>(&settings))
+				return std::make_shared<RemoteGamePadControllerProvider>(*rg);
+			return std::make_shared<RemoteGamePadControllerProvider>();
+		}
 #endif
 #if defined(HAS_GAMECUBE) && HAS_GAMECUBE && defined(HAS_LIBUSB)
 	case InputAPI::GameCube:

@@ -17,6 +17,8 @@ namespace InputAPI
 		WGIGamepad,
 		WGIRawController,
 
+		RemoteGamePad,
+
 		MAX
 	};
 
@@ -42,6 +44,8 @@ namespace InputAPI
 			return "WGIRawController";
 		case SDLController:
 			return "SDLController";
+		case RemoteGamePad:
+			return "RemoteGamePad";
 		default:
 			break;
 		}
@@ -65,6 +69,8 @@ namespace InputAPI
 			return DSUClient;
 		else if (str == to_string(SDLController))
 			return SDLController;
+		else if (str == to_string(RemoteGamePad))
+			return RemoteGamePad;
 		else if (str == "DSU") // legacy
 			return DSUClient;
 		

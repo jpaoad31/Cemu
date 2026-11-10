@@ -34,6 +34,7 @@
 #include "wxgui/input/panels/BalanceBoardInputPanel.h"
 #include "wxgui/input/settings/WiimoteControllerSettings.h"
 #include "util/EventService.h"
+#include "input/api/RemoteGamePad/RemoteGamePadController.h"
 
 #include "resource/embedded/resources.h"
 
@@ -60,6 +61,7 @@ struct ControllerPage
 
 	wxButton* m_controller_settings, * m_controller_calibrate, *m_controller_clear;
 	wxBitmapButton* m_controller_connected;
+	wxStaticText* m_remote_status = nullptr; // Remote GamePad: port, phone, packet rate
 
 	// panel
 	std::array<InputPanel*, EmulatedController::Type::MAX> m_panels{};
@@ -295,6 +297,11 @@ wxWindow* InputSettings2::initialize_page(size_t index)
 		page_data.m_controller_clear = clear;
 		page_data.m_controller_connected = connected_button;
 
+		auto* remote_status = new wxStaticText(page, wxID_ANY, wxEmptyString);
+		remote_status->Hide();
+		sizer->Add(remote_status, wxGBPosition(5, 3), wxGBSpan(1, 3), wxALIGN_CENTER_VERTICAL | wxALL, 5);
+		page_data.m_remote_status = remote_status;
+
 	}
 
 	sizer->Add(new wxStaticLine(page), wxGBPosition(6, 0), wxGBSpan(1, 6), wxEXPAND);
@@ -518,8 +525,42 @@ void InputSettings2::on_notebook_page_changed(wxBookCtrlEvent& event)
 	event.Skip();
 }
 
+void InputSettings2::update_remote_gamepad_status()
+{
+	if (++m_remote_status_tick % 8 != 0) // timer is 25 ms: refresh at ~5 Hz
+		return;
+	auto& page_data = get_current_page_data();
+	auto* text = page_data.m_remote_status;
+	if (!text)
+		return;
+
+	const auto remote = std::dynamic_pointer_cast<RemoteGamePadController>(get_active_controller());
+	auto* page = m_notebook->GetCurrentPage();
+	if (!remote)
+	{
+		if (text->IsShown())
+		{
+			text->Hide();
+			page->Layout();
+		}
+		return;
+	}
+
+	const auto label = wxString::FromUTF8(remote->get_status_text());
+	if (text->GetLabel() != label)
+		text->SetLabel(label);
+	if (!text->IsShown())
+	{
+		text->Show();
+		page->Layout();
+	}
+	page_data.m_controller_connected->SetBitmap(remote->is_connected() ? m_connected : m_disconnected);
+}
+
 void InputSettings2::on_timer(wxTimerEvent&)
 {
+	update_remote_gamepad_status();
+
 	auto& page_data = get_current_page_data();
 	if (!page_data.m_controller) {
 		return;
@@ -972,6 +1013,7 @@ void InputSettings2::on_controller_settings(wxCommandEvent& event)
 	case InputAPI::WGIRawController:
 	case InputAPI::SDLController:
 	case InputAPI::DSUClient:
+	case InputAPI::RemoteGamePad:
 	{
 		DefaultControllerSettings wnd(this, wxGetMousePosition() + wxSize(5, 5), controller);
 		wnd.ShowModal();

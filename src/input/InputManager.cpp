@@ -41,6 +41,9 @@ InputManager::InputManager()
 #if HAS_DSU
 	create_provider<DSUControllerProvider>();
 #endif
+#if HAS_REMOTE_GAMEPAD
+	create_provider<RemoteGamePadControllerProvider>(); // binds its port only once a controller uses it
+#endif
 #if defined(HAS_GAMECUBE) && HAS_GAMECUBE && defined(HAS_LIBUSB)
 	create_provider<GameCubeControllerProvider>();
 #endif

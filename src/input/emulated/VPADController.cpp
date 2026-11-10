@@ -1,5 +1,6 @@
 #include "input/emulated/VPADController.h"
 #include "input/api/Controller.h"
+#include "input/api/RemoteGamePad/RemoteGamePadProtocol.h"
 #ifdef HAS_SDL
 #include "input/api/SDL/SDLController.h"
 #endif
@@ -144,6 +145,9 @@ void VPADController::VPADRead(VPADStatus_t& status, const BtnRepeat& repeat)
 	status.dir.z = {0, 0, 1};
 	status.accXY = {1.0f, 0.0f};
 	update_motion(status);
+
+	// this read has seen the controllers' latched presses (Remote GamePad)
+	controllers_read_done();
 }
 
 void VPADController::update()
@@ -638,6 +642,30 @@ bool VPADController::set_default_mapping(const std::shared_ptr<ControllerBase>& 
 		break;
 	}
 #endif
+	case InputAPI::RemoteGamePad:
+	{
+		// raw button N = protocol bit N; the phone already maps its controller by position
+		static_assert(kButtonId_A == 1 && kButtonId_Minus == 10 && kButtonId_Up == 11 && kButtonId_StickR == 16 && kButtonId_Home == 27,
+			"RemoteGamePad::kGamePadButtons uses VPADController::ButtonId values");
+		for (const auto& b : RemoteGamePad::kGamePadButtons)
+		{
+			cemu_assert_debug(b.vpad_button_id == kButtonId_Home || get_emulated_button_flag(b.vpad_button_id) == b.vpad_flag);
+			mapping.emplace_back((uint64)b.vpad_button_id, (uint64)(kButton0 + RemoteGamePad::BitIndex(b.bit)));
+		}
+		mapping.insert(mapping.end(),
+		{
+			{kButtonId_StickL_Up, kAxisYP},
+			{kButtonId_StickL_Down, kAxisYN},
+			{kButtonId_StickL_Left, kAxisXN},
+			{kButtonId_StickL_Right, kAxisXP},
+
+			{kButtonId_StickR_Up, kRotationYP},
+			{kButtonId_StickR_Down, kRotationYN},
+			{kButtonId_StickR_Left, kRotationXN},
+			{kButtonId_StickR_Right, kRotationXP},
+		});
+		break;
+	}
 	case InputAPI::XInput:
 	{
 		mapping =
@@ -678,10 +706,13 @@ bool VPADController::set_default_mapping(const std::shared_ptr<ControllerBase>& 
 	}
 	}
 
+	// A Remote GamePad is the whole GamePad: its mapping replaces what other controllers (e.g. the
+	// keyboard) had on the same GamePad buttons. Other controllers only fill unmapped buttons.
+	const bool takeover = controller->api() == InputAPI::RemoteGamePad;
 	bool mapping_updated = false;
-	std::for_each(mapping.cbegin(), mapping.cend(), [this, &controller, &mapping_updated](const auto& m)
+	std::for_each(mapping.cbegin(), mapping.cend(), [this, &controller, &mapping_updated, takeover](const auto& m)
 		{
-			if (m_mappings.find(m.first) == m_mappings.cend())
+			if (m_mappings.find(m.first) == m_mappings.cend() || takeover)
 			{
 				set_mapping(m.first, controller, m.second);
 				mapping_updated = true;

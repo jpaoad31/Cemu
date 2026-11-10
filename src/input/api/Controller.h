@@ -106,6 +106,8 @@ public:
 	const ControllerState& get_state() const { return m_last_state; }
 	const ControllerState& get_default_state() { return is_calibrated() ? m_default_state : calibrate(); }
 	virtual ControllerState raw_state() = 0;
+	// the emulated controller finished a game read (VPADRead) that used the last update_state()
+	virtual void on_emulated_read_done() {}
 
 	bool is_calibrated() const { return m_is_calibrated; }
 
