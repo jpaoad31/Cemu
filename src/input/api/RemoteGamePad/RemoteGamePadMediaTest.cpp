@@ -603,6 +603,91 @@ namespace
 		CHECK(peak > 8000);
 		printf("hub: %s\n", Media::StatusText().c_str());
 
+		// 5b. a "blow" (loud white noise, like breath on a microphone) for 400 ms, through ReadMic as
+		// mic.rpl's mic_updateOnAXFrame pulls it (96 samples per 3 ms AX frame) into the game's ring buffer
+		// the way mic_feedSamples writes it (big-endian, 10240 samples like Wii Fit U's MICInit), and read
+		// back the way the game's jet::Platform::GetDRCMicSamples does (MICGetStatus: available and read
+		// index; big-endian halfwords; up to 533 per call; MICSetDataConsumed)
+		{
+			uint32_t rng = 12345;
+			std::vector<int16_t> sent;
+			const uint32_t ring_size = 10240;
+			std::vector<uint16_t> ring(ring_size, 0); // game memory: big-endian samples
+			uint32_t read_index = 0, write_index = 0;
+			std::vector<int16_t> game;
+			int frame = 0;
+			// one AX frame (3 ms): mic_updateOnAXFrame, and the game's read about once per video frame
+			auto ax_frame = [&] {
+				int16_t blk[96];
+				CHECK(Media::ReadMic(blk, 96));
+				for (int16_t v : blk) // mic_feedSamples
+				{
+					ring[write_index] = (uint16_t)(((uint16_t)v >> 8) | ((uint16_t)v << 8));
+					write_index = (write_index + 1) % ring_size;
+				}
+				if (++frame % 5 == 0)
+				{
+					const uint32_t avail = (ring_size + write_index - read_index) % ring_size; // MICGetStatus
+					const uint32_t n = std::min<uint32_t>(avail, 533);
+					for (uint32_t i = 0; i < n; ++i)
+					{
+						const uint16_t be = ring[(read_index + i) % ring_size];
+						game.push_back((int16_t)((be >> 8) | (be << 8))); // lhax
+					}
+					read_index = (read_index + n) % ring_size; // MICSetDataConsumed
+				}
+			};
+			const auto t0 = std::chrono::steady_clock::now();
+			for (int k = 0; k < 40; ++k) // 400 ms, sent and read at real-time pace
+			{
+				int16_t blk[320];
+				for (int i = 0; i < 320; ++i)
+				{
+					rng = rng * 1664525u + 1013904223u;
+					blk[i] = (int16_t)((int32_t)(rng >> 16) - 32768) / 2; // about -9 dBFS RMS noise
+				}
+				sent.insert(sent.end(), blk, blk + 320);
+				MicAudio m;
+				m.first_sample = first;
+				m.sample_count = 320;
+				phone.send(BuildMicAudio(phone.seq++, m, blk), phone.media);
+				first += 320;
+				while (frame * 3 < (k + 1) * 10)
+				{
+					std::this_thread::sleep_until(t0 + std::chrono::milliseconds(frame * 3));
+					ax_frame();
+				}
+			}
+			for (int i = 0; i < 40; ++i) // 120 ms more: drain
+			{
+				std::this_thread::sleep_until(t0 + std::chrono::milliseconds(frame * 3));
+				ax_frame();
+			}
+			auto rms_db = [](const std::vector<int16_t>& v) {
+				double sum = 0;
+				int nz = 0;
+				for (int16_t x : v)
+					if (x) { sum += (double)x * x; nz++; }
+				return nz ? 20 * std::log10(std::sqrt(sum / nz) / 32768.0) : -96.0;
+			};
+			// the game sees the same samples, in order
+			// (the tone from step 5 is still ahead of it in the buffer: find where the noise starts)
+			size_t start = game.size();
+			for (size_t i = 0; i + 4 <= game.size(); ++i)
+				if (std::equal(sent.begin(), sent.begin() + 4, game.begin() + i))
+				{
+					start = i;
+					break;
+				}
+			const size_t matched = (start < game.size() && start + 1000 <= game.size())
+				? (size_t)std::distance(sent.begin(), std::mismatch(sent.begin(), sent.end(), game.begin() + start, game.end()).first) : 0;
+			printf("blow: sent %.1f dBFS, game ring buffer %.1f dBFS, %zu samples to the game, first %zu identical to what was sent\n",
+				rms_db(sent), rms_db(game), game.size(), matched);
+			CHECK(std::abs(rms_db(sent) - rms_db(game)) < 0.5);
+			CHECK(matched >= 8000);
+			printf("hub: %s\n", Media::StatusText().c_str());
+		}
+
 		// 6. video off: the hub stops sending
 		for (int i = 0; i < 3; ++i)
 		{

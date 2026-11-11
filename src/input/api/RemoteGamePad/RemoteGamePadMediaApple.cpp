@@ -281,11 +281,16 @@ namespace
 			if (m_mic_wanted.exchange(w) != w)
 			{
 				m_control_dirty = true;
-				if (!w)
 				{
 					std::scoped_lock lock(m_mic_mutex);
-					m_mic.Clear();
+					if (!w)
+						m_mic.Clear();
+					m_mic_level_text.clear();
+					m_mic_level_start = 0;
 				}
+				// (outside the mic lock: PhoneMicSelected takes m_mutex, which StatusText holds before it)
+				cemuLog_log(LogType::Force, "Remote GamePad: a game {} the GamePad mic{}", w ? "opened" : "closed",
+					w ? (PhoneMicSelected() ? " (the phone's microphone)" : " (Cemu's audio input device: the phone isn't the mic source)") : "");
 			}
 		}
 
@@ -295,6 +300,7 @@ namespace
 				return false;
 			std::scoped_lock lock(m_mic_mutex);
 			m_mic.Pop(dst, count);
+			m_mic_read_samples += count;
 			return true;
 		}
 
@@ -338,7 +344,7 @@ namespace
 			if (mic_phone)
 			{
 				std::scoped_lock ml(m_mic_mutex);
-				mic = m_mic_wanted ? fmt::format("phone, buffer {} ms, underruns {}", m_mic.buffered() / 32, m_mic.underruns()) : std::string("phone (idle)");
+				mic = m_mic_wanted ? fmt::format("phone, buffer {} ms, underruns {}{}", m_mic.buffered() / 32, m_mic.underruns(), m_mic_level_text) : std::string("phone (idle)");
 			}
 			else
 				mic = "Cemu's input device";
@@ -876,7 +882,35 @@ namespace
 				samples[i] = (int16_t)(m.samples[2 * i] | (m.samples[2 * i + 1] << 8));
 			std::scoped_lock lock(m_mic_mutex);
 			m_mic.Push(samples, m.sample_count);
+			// level meter over each second: what arrives from the phone
+			const uint64_t now = now_us();
+			for (size_t i = 0; i < m.sample_count; ++i)
+			{
+				const double x = samples[i];
+				m_mic_sumsq += x * x;
+				m_mic_peak = std::max(m_mic_peak, std::abs((int)samples[i]));
+			}
+			m_mic_count += m.sample_count;
+			if (m_mic_level_start == 0)
+				m_mic_level_start = now;
+			if (now - m_mic_level_start >= 1000000)
+			{
+				auto db = [](double a) { return a > 0 ? 20 * std::log10(a / 32768.0) : -96.0; };
+				m_mic_level_text = fmt::format(", level {:.0f} dBFS, peak {:.0f} dBFS, to the game {}/s",
+					db(std::sqrt(m_mic_sumsq / std::max<uint64_t>(m_mic_count, 1))), db(m_mic_peak),
+					m_mic_read_samples * 1000000 / (now - m_mic_level_start));
+				m_mic_sumsq = 0;
+				m_mic_peak = 0;
+				m_mic_count = 0;
+				m_mic_read_samples = 0;
+				m_mic_level_start = now;
+			}
 		}
+
+		double m_mic_sumsq = 0;
+		int m_mic_peak = 0;
+		uint64_t m_mic_count = 0, m_mic_level_start = 0, m_mic_read_samples = 0;
+		std::string m_mic_level_text;
 
 		struct Rates
 		{
