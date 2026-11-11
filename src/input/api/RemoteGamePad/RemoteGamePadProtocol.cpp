@@ -322,6 +322,15 @@ namespace RemoteGamePad
 		wr8(b, 0);
 		wr16(b, f.display_fps_x10);
 		wr32(b, f.max_bitrate_kbps);
+		if (f.has_audio)
+		{
+			wr16(b, f.audio_level_100us);
+			wr16(b, f.audio_target_100us);
+			wr16(b, f.audio_underruns);
+			wr16(b, f.audio_late);
+			wr16(b, f.audio_packets);
+			wr16(b, f.audio_latency_100us);
+		}
 		finish(b);
 		return b;
 	}
@@ -346,6 +355,16 @@ namespace RemoteGamePad
 		f.flags = p[24];
 		f.display_fps_x10 = rd16(p + 26);
 		f.max_bitrate_kbps = rd32(p + 28);
+		if (h->length >= kVideoFeedbackSizeAudio)
+		{
+			f.has_audio = true;
+			f.audio_level_100us = rd16(p + 32);
+			f.audio_target_100us = rd16(p + 34);
+			f.audio_underruns = rd16(p + 36);
+			f.audio_late = rd16(p + 38);
+			f.audio_packets = rd16(p + 40);
+			f.audio_latency_100us = rd16(p + 42);
+		}
 		return f;
 	}
 
@@ -408,5 +427,43 @@ namespace RemoteGamePad
 		if (m.format != 1 || kMicHeaderSize + (size_t)m.sample_count * 2 > h->length)
 			return std::nullopt;
 		return m;
+	}
+
+	std::vector<uint8_t> BuildPadAudio(uint32_t seq, const PadAudio& a, const int16_t* interleaved)
+	{
+		auto b = begin(MsgType::PadAudio, seq);
+		const uint16_t n = (uint16_t)std::min<size_t>(a.frame_count, kMaxPadAudioFrames);
+		b.reserve(kPadAudioHeaderSize + (size_t)n * 4);
+		wr64(b, a.timestamp_us);
+		wr32(b, a.first_frame);
+		wr16(b, a.sample_rate);
+		wr16(b, n);
+		wr8(b, a.format);
+		wr8(b, a.flags);
+		wr16(b, a.pipeline_100us);
+		for (size_t i = 0; i < (size_t)n * 2; ++i)
+			wr16(b, (uint16_t)interleaved[i]);
+		finish(b);
+		return b;
+	}
+
+	std::optional<PadAudio> ParsePadAudio(const uint8_t* data, size_t size)
+	{
+		const auto h = ParseHeader(data, size);
+		if (!h || h->type != MsgType::PadAudio || h->length < kPadAudioHeaderSize)
+			return std::nullopt;
+		const uint8_t* p = data + kHeaderSize;
+		PadAudio a;
+		a.timestamp_us = rd64(p);
+		a.first_frame = rd32(p + 8);
+		a.sample_rate = rd16(p + 12);
+		a.frame_count = rd16(p + 14);
+		a.format = p[16];
+		a.flags = p[17];
+		a.pipeline_100us = rd16(p + 18);
+		a.samples = data + kPadAudioHeaderSize;
+		if (a.format != 2 || kPadAudioHeaderSize + (size_t)a.frame_count * 4 > h->length)
+			return std::nullopt;
+		return a;
 	}
 }

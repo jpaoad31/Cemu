@@ -42,7 +42,8 @@ already-released press (`Remote GamePad trace: game read got latched press(es)`)
 - **Video**: `LatteRenderTarget_itHLECopyColorBufferToScanBuffer` calls
   `Renderer::CaptureRemoteGamePadFrame` for every DRC scan-out while a phone is subscribed (whether
   or not the GamePad view window is open). Metal draws the DRC texture into an IOSurface-backed
-  854×480 BGRA CVPixelBuffer (output copy shader, sRGB-aware), and the command buffer's completion
+  BGRA CVPixelBuffer (output copy shader, sRGB-aware; 854×480 by default, see "Video size" below),
+  and the command buffer's completion
   handler hands it to VideoToolbox (H.264, low-latency rate control, 60 fps, keyframes on request,
   bitrate from the phone's feedback). Fragments go out from the encoder callback. Vulkan/OpenGL
   don't capture (no video).
@@ -50,17 +51,50 @@ already-released press (`Remote GamePad trace: game read got latched press(es)`)
   to NV12) and the Mac camera. The Mac camera only starts while it's the source.
 - **Mic**: `mic_updateOnAXFrame` reads 96 samples per 3 ms frame from the phone's 32 kHz stream
   (40 ms jitter buffer) instead of Cemu's input device while the phone is the source.
+- **GamePad speaker** (protocol 1.3): `AIInitDRCDMA` (`snd_core/ax_out.cpp`), where every 3 ms AX
+  DRC frame (144 frames, 48 kHz s16 big-endian, 2 or 6 interleaved channels) is copied for the
+  GamePad audio device, first calls `RemoteGamePad::Media::SubmitPadAudio`. While a phone with the
+  audio capability is subscribed and "GamePad audio" isn't *Mac*, the hub takes front L/R, packs
+  240 frames (5 ms) per PAD_AUDIO datagram (992 bytes, ~1.6 Mbit/s, sent from the AX thread to the
+  address the phone's media packets came from) and, with *phone*, returns true so the Mac's GamePad
+  device is fed silence (still fed, so the AX pacing that waits on the device is unchanged). The
+  phone's raw mix is sent before Cemu's GamePad volume; the phone has its own slider. When no phone
+  plays audio, the cost is one atomic load per 3 ms.
 - **Input settings** open on the Remote GamePad (if the GamePad has one) rather than the first
   controller: it has taken over the GamePad's buttons, and showing the empty keyboard entry made
   it look unsaved (the profile did save it).
 - **Settings**: Input settings, under the status line of a Remote GamePad controller: "GamePad
-  camera: phone when connected, else Mac / Mac camera" and "GamePad mic: phone when connected /
-  Cemu's audio input device", saved in the controller profile (`<camera>`, `<mic>`).
+  camera: phone when connected, else Mac / Mac camera", "GamePad mic: phone when connected /
+  Cemu's audio input device" and "GamePad audio: phone when connected, else Mac / Mac (GamePad
+  audio device) / phone and Mac", saved in the controller profile (`<camera>`, `<mic>`, `<speaker>`).
+- **Video size** (`<video_size>` in the profile): "GamePad video: 854×480 (GamePad native)" (default) /
+  "source resolution (up to 1280×720)" / "up to 1920×1080 (1.5×)" / "up to 2560×1440 (2×)". *Source*
+  is the DRC image's host size (`LatteRenderTarget_itHLECopyColorBufferToScanBuffer` reports it every
+  GamePad scan-out through `Media::SetVideoSourceSize`; a resolution graphic pack scales it), fitted
+  inside the cap with its aspect kept, never upscaled. Wii Fit U renders the GamePad image at
+  1280×720, so "source" sends 1280×720, and the larger caps only matter with a resolution pack. When
+  the wanted size changes (setting or source) and holds for 300 ms, the hub rebuilds the encoder and
+  pixel-buffer pool at the new size (the renderer takes the size from each buffer); the phone gets
+  new SPS/PPS with the next keyframe and rebuilds its decoder. Bitrate: the start rate and the
+  default cap grow with the square root of the pixel count relative to 854×480 (6 / 16 Mbit/s there;
+  720p 9 / 24, 1080p 13.4 / 36, 1440p 18 / 48, cap at most 50; a cap from the phone still wins). The
+  phone app needs no change: its display layer is stretched to the 16:9 touch area whatever the
+  stream size, and touch is sent normalised (0..1). The selftest checks 1280×720 and back.
+- **Restarts**: the hub sends a keyframe unasked when GamePad frames resume after 0.5 s or more (game
+  stopped and started, pause) and whenever the encoder is (re)built; a buffer rendered from an old pool
+  at another size is skipped, not encoded into the new session. If VideoToolbox can't create an encoder
+  at the wanted size, it's logged and 854×480 is sent instead. Frame ids start at 1 in a new Cemu
+  process: the receivers (phone app, Cemu's FrameAssembler for the camera) treat a fragment more than
+  120 frames older than the newest completed one as a restarted stream (reset, wait for a keyframe)
+  instead of as late. The selftest covers a pause, a restart with ids from 1 plus a size change, and
+  2560×1440.
 - The status line also shows how evenly the game delivers GamePad frames (frames/s, mean interval
   ± spread, max, histogram <12/~17/~25/~33/>40 ms, frames skipped because the encoder was busy)
   and the encoder mode. The fallback (non-low-latency) encoder also makes keyframes only on request.
 - The status line adds the video (fps sent, Mbit/s and target, fps on the phone, latency with its
-  Mac/arrival/decode parts, drops) and the camera and mic sources.
+  Mac/arrival/decode parts, drops), the camera and mic sources, and the GamePad speaker: where it
+  plays, PAD_AUDIO packets/s against the target 200, Mbit/s, mixed→sent, and the phone's buffer
+  level/target, latency estimate, underruns and late/dropped packets (from its feedback).
 
 ## Files
 
@@ -76,6 +110,7 @@ already-released press (`Remote GamePad trace: game read got latched press(es)`)
 | `src/input/api/RemoteGamePad/RemoteGamePadMediaTest.cpp`, `...TestShim.h` | standalone media test with a synthetic picture (not in CMake) |
 | `Renderer.h`, `MetalRenderer.{h,cpp}`, `LatteRenderTarget.cpp` | DRC capture |
 | `camera/CameraBackendMacOS.cpp`, `mic/mic.cpp` | phone camera / mic as sources |
+| `snd_core/ax_out.cpp` | GamePad speaker tap (`AIInitDRCDMA`) |
 | `src/input/api/RemoteGamePad/RemoteGamePadControllerProvider.{h,cpp}` | receive thread, handshake, input acks (latency), rate/gaps, motion |
 | `src/input/api/RemoteGamePad/RemoteGamePadController.{h,cpp}` | the controller: buttons, sticks, touch (`has_position`), motion |
 | `InputAPI.h`, `ControllerFactory.cpp`, `InputManager.{h,cpp}`, `input/CMakeLists.txt` | registration |
@@ -95,6 +130,8 @@ Test without the phone:
     /tmp/rgmedia selftest
     # with a game drawing the GamePad screen:
     ~/github/jpaoad31/wiiu-gamepad-remote/tools/send_test.py video --host 127.0.0.1 --out /tmp/v.h264
+    # GamePad speaker (a game running, "GamePad audio" on phone), or against "/tmp/rgmedia serve 26790" with --port 26790 --tone:
+    ~/github/jpaoad31/wiiu-gamepad-remote/tools/send_test.py audio --host 127.0.0.1 --out /tmp/pad.wav
 
 ## Motion axes
 

@@ -17,8 +17,9 @@ namespace RemoteGamePad
 	constexpr uint8_t kMagic[4] = {'W', 'U', 'G', 'P'};
 	constexpr uint8_t kVersion = 1;
 	// minor revision, announced in HELLO; 1.1 appends press counters to INPUT, 1.2 adds the media
-	// port (GamePad video to the phone, the phone's camera and microphone to the host)
-	constexpr uint16_t kMinorVersion = 2;
+	// port (GamePad video to the phone, the phone's camera and microphone to the host), 1.3 the
+	// GamePad speaker audio to the phone (PAD_AUDIO)
+	constexpr uint16_t kMinorVersion = 3;
 	constexpr uint16_t kDefaultPort = 26770;
 	constexpr size_t kHeaderSize = 12;
 	constexpr size_t kMaxPacketSize = 1400;
@@ -36,7 +37,8 @@ namespace RemoteGamePad
 		CameraFragment = 0x18, // phone -> host: a piece of an encoded front-camera frame
 		MediaControl = 0x19,   // host -> phone, ~4 Hz: camera/microphone wanted, camera keyframe request
 		MicAudio = 0x30,       // phone -> host: microphone PCM
-		// 0x20-0x2F: rumble (phase 3), 0x31-0x3F: speaker audio (phase 3)
+		PadAudio = 0x31,       // 1.3, host -> phone: the GamePad speaker (DRC) mix, PCM
+		// 0x20-0x2F: rumble (phase 3), 0x32-0x3F: reserved, audio
 	};
 
 	// Wii U GamePad buttons, already mapped by position on the phone
@@ -136,7 +138,7 @@ namespace RemoteGamePad
 		kCapTouch = 1 << 1,
 		kCapVideo = 1 << 2,  // phase 2
 		kCapRumble = 1 << 3, // phase 3
-		kCapAudio = 1 << 4,  // phase 3
+		kCapAudio = 1 << 4,  // 1.3: the phone plays the GamePad speaker (PAD_AUDIO); the host can send it
 		kCapCamera = 1 << 5, // 1.2: the phone can send its front camera
 		kCapMic = 1 << 6,    // 1.2: the phone can send its microphone
 	};
@@ -344,6 +346,14 @@ namespace RemoteGamePad
 		uint8_t flags = 0;                  // FeedbackFlags
 		uint16_t display_fps_x10 = 0;
 		uint32_t max_bitrate_kbps = 0;      // phone's cap, 0 = host default
+		// 1.3 (appended; zero from older phones): the phone's speaker (PAD_AUDIO) playback
+		bool has_audio = false;             // the message carried these fields
+		uint16_t audio_level_100us = 0;     // jitter buffer level
+		uint16_t audio_target_100us = 0;    // jitter buffer target
+		uint16_t audio_underruns = 0;       // in this interval
+		uint16_t audio_late = 0;            // packets late, duplicate or dropped (overrun) in this interval
+		uint16_t audio_packets = 0;         // packets received in this interval
+		uint16_t audio_latency_100us = 0;   // phone's estimate: mixed on the host -> out of the speaker
 	};
 	enum FeedbackFlags : uint8_t
 	{
@@ -351,6 +361,7 @@ namespace RemoteGamePad
 		kFeedbackNoVideo = 1 << 1, // keep-alive only: don't send video
 	};
 	constexpr size_t kVideoFeedbackSize = kHeaderSize + 32; // 44
+	constexpr size_t kVideoFeedbackSizeAudio = kVideoFeedbackSize + 12; // 56 (1.3)
 
 	// MEDIA_CONTROL (0x19), host -> phone on the media port
 	struct MediaControl
@@ -364,6 +375,7 @@ namespace RemoteGamePad
 		kControlCamera = 1 << 0,         // send the front camera
 		kControlCameraKeyframe = 1 << 1, // the host lost camera data: send a keyframe
 		kControlMic = 1 << 2,            // send the microphone
+		kControlSpeaker = 1 << 3,        // 1.3: the host sends the GamePad speaker to the phone (PAD_AUDIO)
 	};
 	constexpr size_t kMediaControlSize = kHeaderSize + 8; // 20
 
@@ -379,6 +391,30 @@ namespace RemoteGamePad
 	};
 	constexpr size_t kMicHeaderSize = kHeaderSize + 20; // 32
 	constexpr size_t kMaxMicSamples = (kMaxPacketSize - kMicHeaderSize) / 2;
+
+	// PAD_AUDIO (0x31, 1.3), host -> phone on the media port: the GamePad speaker (DRC) mix,
+	// signed 16-bit little-endian interleaved stereo PCM at 48 kHz, 240 frames (5 ms) per packet
+	struct PadAudio
+	{
+		uint64_t timestamp_us = 0;   // when the first frame was mixed, host clock
+		uint32_t first_frame = 0;    // running sample-frame counter of the first frame (wraps)
+		uint16_t sample_rate = 48000;
+		uint16_t frame_count = 0;    // stereo frames in this packet
+		uint8_t format = 2;          // 2: PCM s16le interleaved stereo (L, R)
+		uint8_t flags = 0;           // PadAudioFlags
+		uint16_t pipeline_100us = 0; // host: first frame mixed -> packet sent, 0.1 ms
+		const uint8_t* samples = nullptr; // frame_count * 4 bytes, points into the packet
+	};
+	enum PadAudioFlags : uint8_t
+	{
+		kPadAudioDiscontinuity = 1 << 0, // first packet after the stream (re)started: resync
+	};
+	constexpr size_t kPadAudioHeaderSize = kHeaderSize + 20; // 32
+	constexpr uint16_t kPadAudioFrames = 240;                // 5 ms at 48 kHz: 992-byte datagrams
+	constexpr size_t kMaxPadAudioFrames = (kMaxPacketSize - kPadAudioHeaderSize) / 4;
+
+	std::vector<uint8_t> BuildPadAudio(uint32_t seq, const PadAudio& a, const int16_t* interleaved);
+	std::optional<PadAudio> ParsePadAudio(const uint8_t* data, size_t size);
 
 	std::vector<uint8_t> BuildFragment(MsgType type, uint32_t seq, const MediaFragment& f);
 	std::optional<MediaFragment> ParseFragment(const uint8_t* data, size_t size); // VideoFragment or CameraFragment

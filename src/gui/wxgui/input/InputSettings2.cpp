@@ -66,6 +66,8 @@ struct ControllerPage
 	wxStaticText* m_remote_status = nullptr; // Remote GamePad: port, phone, packet rate
 	wxChoice* m_remote_camera = nullptr;     // Remote GamePad: GamePad camera source
 	wxChoice* m_remote_mic = nullptr;        // Remote GamePad: GamePad mic source
+	wxChoice* m_remote_speaker = nullptr;    // Remote GamePad: GamePad speaker target
+	wxChoice* m_remote_video = nullptr;      // Remote GamePad: size of the video sent to the phone
 
 	// panel
 	std::array<InputPanel*, EmulatedController::Type::MAX> m_panels{};
@@ -318,13 +320,33 @@ wxWindow* InputSettings2::initialize_page(size_t index)
 		remote_mic->SetSelection((int)RemoteGamePad::Media::GetMicSource());
 		remote_mic->Bind(wxEVT_CHOICE, [](wxCommandEvent& e) { RemoteGamePad::Media::SetMicSource((RemoteGamePad::Media::MicSource)e.GetSelection()); });
 		remote_mic->Hide();
+		auto* remote_speaker = new wxChoice(page, wxID_ANY);
+		remote_speaker->Append(_("GamePad audio: phone when connected, else Mac"));
+		remote_speaker->Append(_("GamePad audio: Mac (GamePad audio device)"));
+		remote_speaker->Append(_("GamePad audio: phone and Mac"));
+		remote_speaker->SetSelection((int)RemoteGamePad::Media::GetSpeakerTarget());
+		remote_speaker->Bind(wxEVT_CHOICE, [](wxCommandEvent& e) { RemoteGamePad::Media::SetSpeakerTarget((RemoteGamePad::Media::SpeakerTarget)e.GetSelection()); });
+		remote_speaker->Hide();
 		remote_choices->Add(remote_camera, 0, wxTOP | wxRIGHT, 5);
-		remote_choices->Add(remote_mic, 0, wxTOP, 5);
+		remote_choices->Add(remote_mic, 0, wxTOP | wxRIGHT, 5);
+		remote_choices->Add(remote_speaker, 0, wxTOP, 5);
 		remote_sizer->Add(remote_choices);
+		auto* remote_video = new wxChoice(page, wxID_ANY);
+		remote_video->Append(_("GamePad video: 854x480 (GamePad native)"));
+		remote_video->Append(_("GamePad video: source resolution (up to 1280x720)"));
+		remote_video->Append(_("GamePad video: source resolution, up to 1920x1080 (1.5x, with a resolution pack)"));
+		remote_video->Append(_("GamePad video: source resolution, up to 2560x1440 (2x, with a resolution pack)"));
+		remote_video->SetToolTip(_("Size of the GamePad picture sent to the phone. \"Source\" is the size the game renders the GamePad image at, as Cemu holds it (a resolution graphic pack scales it), capped; larger sizes use a higher bitrate."));
+		remote_video->SetSelection((int)RemoteGamePad::Media::GetVideoResolution());
+		remote_video->Bind(wxEVT_CHOICE, [](wxCommandEvent& e) { RemoteGamePad::Media::SetVideoResolution((RemoteGamePad::Media::VideoResolution)e.GetSelection()); });
+		remote_video->Hide();
+		remote_sizer->Add(remote_video, 0, wxTOP, 5);
 		sizer->Add(remote_sizer, wxGBPosition(5, 3), wxGBSpan(1, 3), wxALIGN_CENTER_VERTICAL | wxALL, 5);
 		page_data.m_remote_status = remote_status;
 		page_data.m_remote_camera = remote_camera;
 		page_data.m_remote_mic = remote_mic;
+		page_data.m_remote_speaker = remote_speaker;
+		page_data.m_remote_video = remote_video;
 
 	}
 
@@ -577,13 +599,16 @@ void InputSettings2::update_remote_gamepad_status()
 	const auto remote = std::dynamic_pointer_cast<RemoteGamePadController>(get_active_controller());
 	auto* page = m_notebook->GetCurrentPage();
 	const bool media = remote && RemoteGamePad::Media::IsSupported();
-	for (wxChoice* c : {page_data.m_remote_camera, page_data.m_remote_mic})
+	for (wxChoice* c : {page_data.m_remote_camera, page_data.m_remote_mic, page_data.m_remote_speaker, page_data.m_remote_video})
 	{
 		if (c && c->IsShown() != media)
 		{
 			c->Show(media);
 			if (media) // the setting may have come from a profile load
-				c->SetSelection(c == page_data.m_remote_camera ? (int)RemoteGamePad::Media::GetCameraSource() : (int)RemoteGamePad::Media::GetMicSource());
+				c->SetSelection(c == page_data.m_remote_camera ? (int)RemoteGamePad::Media::GetCameraSource()
+					: c == page_data.m_remote_mic ? (int)RemoteGamePad::Media::GetMicSource()
+					: c == page_data.m_remote_video ? (int)RemoteGamePad::Media::GetVideoResolution()
+					: (int)RemoteGamePad::Media::GetSpeakerTarget());
 			page->Layout();
 		}
 	}

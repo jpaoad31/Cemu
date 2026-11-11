@@ -47,6 +47,12 @@ void RemoteGamePadController::save(pugi::xml_node& node)
 		RemoteGamePad::Media::GetCameraSource() == RemoteGamePad::Media::CameraSource::Mac ? "mac" : "auto");
 	node.append_child("mic").append_child(pugi::node_pcdata).set_value(
 		RemoteGamePad::Media::GetMicSource() == RemoteGamePad::Media::MicSource::Host ? "host" : "auto");
+	const auto speaker = RemoteGamePad::Media::GetSpeakerTarget();
+	node.append_child("speaker").append_child(pugi::node_pcdata).set_value(
+		speaker == RemoteGamePad::Media::SpeakerTarget::Mac ? "mac" : speaker == RemoteGamePad::Media::SpeakerTarget::Both ? "both" : "phone");
+	static constexpr const char* kVideoNames[] = {"gamepad", "source720", "source1080", "source1440"};
+	const int video = std::clamp((int)RemoteGamePad::Media::GetVideoResolution(), 0, 3);
+	node.append_child("video_size").append_child(pugi::node_pcdata).set_value(kVideoNames[video]);
 }
 
 void RemoteGamePadController::load(const pugi::xml_node& node)
@@ -60,6 +66,21 @@ void RemoteGamePadController::load(const pugi::xml_node& node)
 		RemoteGamePad::Media::SetCameraSource(std::string_view(value.child_value()) == "mac" ? RemoteGamePad::Media::CameraSource::Mac : RemoteGamePad::Media::CameraSource::Auto);
 	if (const auto value = node.child("mic"))
 		RemoteGamePad::Media::SetMicSource(std::string_view(value.child_value()) == "host" ? RemoteGamePad::Media::MicSource::Host : RemoteGamePad::Media::MicSource::Auto);
+	if (const auto value = node.child("speaker"))
+	{
+		const std::string_view v = value.child_value();
+		RemoteGamePad::Media::SetSpeakerTarget(v == "mac" ? RemoteGamePad::Media::SpeakerTarget::Mac
+			: v == "both" ? RemoteGamePad::Media::SpeakerTarget::Both : RemoteGamePad::Media::SpeakerTarget::Phone);
+	}
+
+	if (const auto value = node.child("video_size"))
+	{
+		const std::string_view v = value.child_value();
+		RemoteGamePad::Media::SetVideoResolution(v == "source720" ? RemoteGamePad::Media::VideoResolution::Source720
+			: v == "source1080" ? RemoteGamePad::Media::VideoResolution::Source1080
+			: v == "source1440" ? RemoteGamePad::Media::VideoResolution::Source1440
+			: RemoteGamePad::Media::VideoResolution::GamePad);
+	}
 
 	const auto provider = InputManager::instance().get_api_provider(api(), settings);
 	update_provider(std::dynamic_pointer_cast<RemoteGamePadControllerProvider>(provider));

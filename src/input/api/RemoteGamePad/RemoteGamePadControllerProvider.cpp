@@ -287,7 +287,7 @@ void RemoteGamePadControllerProvider::send_hello_ack(uint32 client_id, const Pee
 	ack.video_port = 0;
 	if (MediaPortHere())
 	{
-		ack.capabilities |= RemoteGamePad::kCapVideo | RemoteGamePad::kCapCamera | RemoteGamePad::kCapMic;
+		ack.capabilities |= RemoteGamePad::kCapVideo | RemoteGamePad::kCapCamera | RemoteGamePad::kCapMic | RemoteGamePad::kCapAudio;
 		ack.video_port = RemoteGamePad::Media::Port();
 	}
 	boost::system::error_code ec;

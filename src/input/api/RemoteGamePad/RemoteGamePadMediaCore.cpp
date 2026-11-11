@@ -1,6 +1,8 @@
 #include "input/api/RemoteGamePad/RemoteGamePadMediaCore.h"
+#include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace RemoteGamePad
@@ -65,7 +67,12 @@ namespace RemoteGamePad
 		m_stats.fragments++;
 		// late: a newer frame has already completed
 		if (m_have_last && !SeqNewer(f.frame_id, m_last_complete))
-			return std::nullopt;
+		{
+			if ((int32_t)(m_last_complete - f.frame_id) <= kRestartGap)
+				return std::nullopt;
+			Reset(); // the sender's frame ids started over: forget the old stream, wait for a keyframe
+			m_restarts++;
+		}
 		auto it = m_pending.find(f.frame_id);
 		if (it == m_pending.end())
 		{
@@ -152,6 +159,14 @@ namespace RemoteGamePad
 		return frame;
 	}
 
+	void BitrateController::SetPixelRatio(double ratio)
+	{
+		const double f = std::sqrt(std::max(ratio, 1.0));
+		m_start = (uint32_t)std::min<double>(kStartKbps * f, kMaxScaledKbps);
+		m_default_max = (uint32_t)std::min<double>(kDefaultMaxKbps * f, kMaxScaledKbps);
+		SetMax(m_phone_max);
+	}
+
 	bool BitrateController::OnFeedback(const VideoFeedback& f, uint64_t now_us)
 	{
 		const uint32_t before = m_kbps;
@@ -236,5 +251,28 @@ namespace RemoteGamePad
 		}
 		std::fill(dst + n, dst + count, (int16_t)0);
 		return n;
+	}
+}
+
+namespace RemoteGamePad::Media
+{
+	void VideoSizeFor(VideoResolution mode, int source_width, int source_height, int& width, int& height)
+	{
+		int cap_w = 1280, cap_h = 720;
+		switch (mode)
+		{
+		case VideoResolution::Source720: break;
+		case VideoResolution::Source1080: cap_w = 1920; cap_h = 1080; break;
+		case VideoResolution::Source1440: cap_w = 2560; cap_h = 1440; break;
+		default: width = 854; height = 480; return;
+		}
+		if (source_width < 256 || source_height < 144)
+		{
+			source_width = 1280; // not known yet: what most games render the GamePad image at
+			source_height = 720;
+		}
+		double scale = std::min({1.0, (double)cap_w / source_width, (double)cap_h / source_height});
+		width = std::max(2, (int)std::lround(source_width * scale) & ~1);
+		height = std::max(2, (int)std::lround(source_height * scale) & ~1);
 	}
 }

@@ -4,6 +4,7 @@
 #include "audio/IAudioAPI.h"
 //#include "ax.h"
 #include "config/CemuConfig.h"
+#include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 
 namespace snd_core
 {
@@ -309,11 +310,17 @@ namespace snd_core
 
 		std::shared_lock lock(g_audioMutex);
 
+		// Remote GamePad (protocol 1.3): the DRC mix goes to the phone's speaker; when the phone is the
+		// only target the Mac's GamePad device gets silence (still fed, so the device keeps its pace)
+		const sint32 framesPerChannel = AIGetSamplesPerChannel(AX_DEV_DRC);
+		const bool phoneOnly = framesPerChannel > 0 &&
+			RemoteGamePad::Media::SubmitPadAudio(sampleData, (size_t)framesPerChannel, (size_t)(sampleCount / framesPerChannel));
+
 		const uint32 channels = g_padAudio ? g_padAudio->GetChannels() : AX_DRC_CHANNEL_COUNT;
 		sint16* outputChannel = tempDRCChannelData + AX_SAMPLES_PER_3MS_48KHZ * tempDRCAudioBlockCounter * channels;
 		for (sint32 i = 0; i < sampleCount; ++i)
 		{
-			outputChannel[i] = _swapEndianS16(sampleData[i]);
+			outputChannel[i] = phoneOnly ? 0 : _swapEndianS16(sampleData[i]);
 		}
 
 		tempDRCAudioBlockCounter++;

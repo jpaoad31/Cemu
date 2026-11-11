@@ -5,10 +5,15 @@
 //             pattern; a fake phone does the handshake, sends feedback, reassembles and decodes the
 //             video with VideoToolbox and checks the pixels, frame rate, latency, loss recovery
 //             (a dropped fragment -> keyframe request -> recovery) and bitrate adaptation; then the
-//             camera (fake phone encodes -> hub decodes to NV12) and microphone paths.
+//             camera (fake phone encodes -> hub decodes to NV12) and microphone paths, and the
+//             GamePad speaker (1.3): a synthetic stereo tone in AX's DRC DMA layout (6-channel
+//             big-endian, 144 frames per 3 ms) through Media::SubmitPadAudio (the tap in
+//             ax_out.cpp) -> PAD_AUDIO packets -> the fake phone, checked sample for sample, for
+//             rate and continuity, and the phone / Mac / both targets.
 //   serve [port] [seconds]
 //             a minimal "Cemu": answers HELLO on port (default 26790) with the media port (port+1)
-//             and streams the test pattern, for tools/send_test.py video in the app repository.
+//             and streams the test pattern and the tone, for tools/send_test.py video / audio in
+//             the app repository.
 //
 // Build and run from the repository root:
 //   clang++ -std=c++20 -O1 -Wall -I src -I build/vcpkg_installed/arm64-osx/include -DFMT_HEADER_ONLY \
@@ -95,6 +100,7 @@ namespace
 	struct Source
 	{
 		std::atomic_bool run{true};
+		std::atomic_bool paused{false}; // the game stopped (no GamePad frames)
 		std::atomic_uint32_t frames{0};
 		std::thread thread;
 		void Start()
@@ -106,7 +112,7 @@ namespace
 				{
 					next += std::chrono::microseconds(16667);
 					std::this_thread::sleep_until(next);
-					if (!Media::VideoWanted())
+					if (!Media::VideoWanted() || paused)
 						continue;
 					void* pb = Media::AcquireVideoBuffer();
 					if (!pb)
@@ -124,6 +130,100 @@ namespace
 			if (thread.joinable())
 				thread.join();
 		}
+	};
+
+	// the GamePad speaker mix as AX hands it to AIInitDRCDMA: every 3 ms, 144 sample frames of
+	// `channels` interleaved big-endian s16 (6 in surround mode: L, R, then four others)
+	int16_t tone_left(uint64_t g) { return (int16_t)std::lround(16000 * std::sin(2 * M_PI * 440.0 * (double)(g % 48000) / 48000.0)); }
+	int16_t tone_right(uint64_t g) { return (int16_t)std::lround(8000 * std::sin(2 * M_PI * 1000.0 * (double)(g % 48000) / 48000.0)); }
+	int16_t be16(int16_t v) { return (int16_t)(((uint16_t)v >> 8) | ((uint16_t)v << 8)); }
+
+	struct DrcTone
+	{
+		std::atomic_bool run{true};
+		std::thread thread;
+		size_t channels = 6;
+		std::atomic_uint64_t frames{0}; // generated (g of the next frame)
+		std::atomic_uint32_t muted{0}, unmuted{0};
+		void Start()
+		{
+			thread = std::thread([this] {
+				auto next = std::chrono::steady_clock::now();
+				std::vector<int16_t> buf(144 * 8);
+				while (run)
+				{
+					next += 3ms;
+					std::this_thread::sleep_until(next);
+					const uint64_t g = frames;
+					for (size_t f = 0; f < 144; ++f)
+					{
+						buf[f * channels] = be16(tone_left(g + f));
+						if (channels > 1)
+							buf[f * channels + 1] = be16(tone_right(g + f));
+						for (size_t c = 2; c < channels; ++c)
+							buf[f * channels + c] = be16(0x1234); // surround channels: not sent
+					}
+					(Media::SubmitPadAudio(buf.data(), 144, channels) ? muted : unmuted)++;
+					frames = g + 144;
+				}
+			});
+		}
+		void Stop()
+		{
+			run = false;
+			if (thread.joinable())
+				thread.join();
+		}
+	};
+
+	// the phone's side of PAD_AUDIO: continuity, rate, samples
+	struct SpeakerRx
+	{
+		uint32_t packets = 0, gaps = 0, discontinuities = 0, bad_format = 0;
+		bool have = false;
+		uint32_t first_counter = 0, next_counter = 0;
+		uint64_t first_arrival_us = 0, last_arrival_us = 0;
+		std::vector<int16_t> left, right; // by counter - first_counter
+		std::vector<double> mix_to_arrival_ms; // packet timestamp (first frame mixed) -> received; same clock here
+		double max_jitter_ms = 0;          // arrival vs. the packet's media time
+		double min_offset = 1e18, max_offset = -1e18;
+		void Add(const PadAudio& a, uint64_t now)
+		{
+			if (a.sample_rate != 48000 || a.frame_count == 0)
+			{
+				bad_format++;
+				return;
+			}
+			if (a.flags & kPadAudioDiscontinuity)
+				discontinuities++;
+			if (!have)
+			{
+				have = true;
+				first_counter = next_counter = a.first_frame;
+				first_arrival_us = now;
+			}
+			if (a.first_frame != next_counter)
+				gaps++;
+			next_counter = a.first_frame + a.frame_count;
+			packets++;
+			last_arrival_us = now;
+			const size_t base = a.first_frame - first_counter;
+			if (left.size() < base + a.frame_count)
+			{
+				left.resize(base + a.frame_count);
+				right.resize(base + a.frame_count);
+			}
+			for (size_t i = 0; i < a.frame_count; ++i)
+			{
+				left[base + i] = (int16_t)(a.samples[4 * i] | (a.samples[4 * i + 1] << 8));
+				right[base + i] = (int16_t)(a.samples[4 * i + 2] | (a.samples[4 * i + 3] << 8));
+			}
+			mix_to_arrival_ms.push_back((now - a.timestamp_us) / 1000.0);
+			const double offset = (double)now / 1000.0 - (double)base / 48.0; // ms
+			min_offset = std::min(min_offset, offset);
+			max_offset = std::max(max_offset, offset);
+		}
+		void Reset() { *this = SpeakerRx{}; }
 	};
 
 	int udp_socket_v6(uint16_t port)
@@ -172,7 +272,7 @@ namespace
 					Media::SetClient(hello->client_id, hello->capabilities, hello->device_name);
 					HelloAck ack;
 					ack.client_id = hello->client_id;
-					ack.capabilities = kCapMotion | kCapTouch | kCapVideo | kCapCamera | kCapMic;
+					ack.capabilities = kCapMotion | kCapTouch | kCapVideo | kCapCamera | kCapMic | kCapAudio;
 					ack.video_port = Media::Port();
 					ack.host_name = "RemoteGamePadMediaTest";
 					const auto pkt = BuildHelloAck(seq++, ack);
@@ -207,10 +307,14 @@ namespace
 		CVPixelBufferRef last_image = nullptr;
 		uint32_t last_frame_id = 0;
 		uint32_t keyframes = 0, keyframe_requests = 0;
+		uint32_t size_changes = 0;
+		uint16_t last_fragment_width = 0, last_fragment_height = 0;
 		uint32_t drop_fragment_of_frame = 0; // simulate loss: drop fragment 1 of this frame id
 		MediaControl last_control{};
 		uint32_t controls = 0;
 		std::vector<uint16_t> bitrates;
+		SpeakerRx speaker;
+		uint16_t caps = kCapMotion | kCapTouch | kCapVideo | kCapCamera | kCapMic | kCapAudio;
 
 		Phone(uint16_t port)
 		{
@@ -236,18 +340,25 @@ namespace
 		{
 			Hello h;
 			h.client_id = client_id;
-			h.capabilities = kCapMotion | kCapTouch | kCapVideo | kCapCamera | kCapMic;
+			h.capabilities = caps;
 			h.minor_version = kMinorVersion;
 			h.device_name = "selftest phone";
 			send(BuildHello(seq++, h), control);
 			uint8_t buf[2048];
-			pollfd p{fd, POLLIN, 0};
-			if (poll(&p, 1, 1000) <= 0)
-				return false;
-			const ssize_t n = recv(fd, buf, sizeof(buf), 0);
-			const auto h2 = ParseHeader(buf, (size_t)n);
-			if (!h2 || h2->type != MsgType::HelloAck)
-				return false;
+			// (media may be arriving on the same socket already: skip it)
+			const uint64_t until = now_us() + 1000000;
+			for (;;)
+			{
+				pollfd p{fd, POLLIN, 0};
+				if (now_us() >= until || poll(&p, 1, 100) < 0)
+					return false;
+				if (!(p.revents & POLLIN))
+					continue;
+				const ssize_t n = recv(fd, buf, sizeof(buf), 0);
+				const auto h2 = ParseHeader(buf, (size_t)n);
+				if (h2 && h2->type == MsgType::HelloAck)
+					break;
+			}
 			const uint16_t video_port = buf[18] | (buf[19] << 8);
 			media = control;
 			media.sin6_port = htons(video_port);
@@ -267,6 +378,12 @@ namespace
 			f.interval_ms = 100;
 			f.flags = (keyframe_request ? kFeedbackKeyframeRequest : 0) | (video ? 0 : kFeedbackNoVideo);
 			f.display_fps_x10 = 600;
+			// 1.3: speaker stats (as a phone with a 30 ms jitter buffer would report them)
+			f.has_audio = true;
+			f.audio_level_100us = 300;
+			f.audio_target_100us = 300;
+			f.audio_packets = 20;
+			f.audio_latency_100us = 420;
 			send(BuildVideoFeedback(seq++, f), media);
 			if (keyframe_request)
 				keyframe_requests++;
@@ -308,6 +425,24 @@ namespace
 				else
 					sample.insert(sample.end(), d.begin() + off, d.begin() + off + 4 + n);
 				off += 4 + n;
+			}
+			if (ps.size() >= 2 && decoder && format)
+			{
+				// new parameter sets (the host changed the video size): a new decoder, as the app does
+				CMFormatDescriptionRef next = nullptr;
+				CMVideoFormatDescriptionCreateFromH264ParameterSets(nullptr, ps.size(), ps.data(), ps_sizes.data(), 4, &next);
+				if (next && !CMFormatDescriptionEqual(next, format))
+				{
+					VTDecompressionSessionWaitForAsynchronousFrames(decoder);
+					VTDecompressionSessionInvalidate(decoder);
+					CFRelease(decoder);
+					CFRelease(format);
+					decoder = nullptr;
+					format = nullptr;
+					size_changes++;
+				}
+				if (next)
+					CFRelease(next);
 			}
 			if (ps.size() >= 2 && !decoder)
 			{
@@ -365,15 +500,37 @@ namespace
 					}
 					continue;
 				}
+				if (h->type == MsgType::PadAudio)
+				{
+					if (auto a = ParsePadAudio(buf, (size_t)n))
+						speaker.Add(*a, now_us());
+					continue;
+				}
 				const auto f = ParseFragment(buf, (size_t)n);
 				if (!f || h->type != MsgType::VideoFragment)
 					continue;
 				if (f->frame_id == drop_fragment_of_frame && f->index == 0)
 					continue; // simulated loss
 				if (f->index == 0)
+				{
 					bitrates.push_back(f->bitrate_10kbps);
+					last_fragment_width = f->width;
+					last_fragment_height = f->height;
+				}
 				const bool was_needed = assembler.NeedKeyframe();
+				const uint32_t restarts_before = assembler.Restarts();
 				auto fr = assembler.Add(*f, now_us());
+				if (assembler.Restarts() != restarts_before && decoder)
+				{
+					// as the app does: the host started over, a new decoder from the next keyframe
+					printf("  phone: host restarted its stream (frame id %u): decoder reset\n", f->frame_id);
+					VTDecompressionSessionWaitForAsynchronousFrames(decoder);
+					VTDecompressionSessionInvalidate(decoder);
+					CFRelease(decoder);
+					CFRelease(format);
+					decoder = nullptr;
+					format = nullptr;
+				}
 				if (was_needed && !assembler.NeedKeyframe())
 					Feedback(false); // recovered
 				else if (!was_needed && assembler.NeedKeyframe())
@@ -389,7 +546,7 @@ namespace
 		}
 
 		// check the newest decoded image against the pattern of its frame (quadrant colours)
-		bool CheckImage()
+		bool CheckImage(int want_w = 854, int want_h = 480)
 		{
 			if (!last_image)
 				return false;
@@ -398,7 +555,9 @@ namespace
 			const size_t pitch = CVPixelBufferGetBytesPerRow(last_image);
 			const int w = (int)CVPixelBufferGetWidth(last_image), h = (int)CVPixelBufferGetHeight(last_image);
 			// each quadrant should be a flat primary-ish colour: sample the centre of each quadrant away from the bar
-			bool ok = w == 854 && h == 480;
+			bool ok = w == want_w && h == want_h;
+			if (!ok)
+				printf("  decoded image %dx%d, expected %dx%d\n", w, h, want_w, want_h);
 			for (int q = 0; q < 4 && ok; ++q)
 			{
 				const int x = (q & 1) ? w * 3 / 4 : w / 4, y = (q & 2) ? h * 3 / 4 : h / 4;
@@ -557,6 +716,110 @@ namespace
 		CHECK(!phone.bitrates.empty() && phone.bitrates.back() > phone.bitrates.front());
 		printf("bitrate %u -> %u kbit/s\n", phone.bitrates.front() * 10, phone.bitrates.back() * 10);
 
+		// 3b. video size setting: "source resolution" with a 1280x720 GamePad image (Wii Fit U's DRC
+		// colour buffer) -> the encoder is rebuilt at 1280x720 with a higher start rate; the phone gets
+		// new SPS/PPS, rebuilds its decoder and shows 1280x720. Then back to 854x480.
+		{
+			int w = 0, h = 0;
+			Media::VideoSizeFor(Media::VideoResolution::GamePad, 1280, 720, w, h);
+			CHECK(w == 854 && h == 480);
+			Media::VideoSizeFor(Media::VideoResolution::Source720, 1280, 720, w, h);
+			CHECK(w == 1280 && h == 720);
+			Media::VideoSizeFor(Media::VideoResolution::Source720, 2560, 1440, w, h); // a 2x pack: capped
+			CHECK(w == 1280 && h == 720);
+			Media::VideoSizeFor(Media::VideoResolution::Source1080, 2560, 1440, w, h);
+			CHECK(w == 1920 && h == 1080);
+			Media::VideoSizeFor(Media::VideoResolution::Source1080, 1280, 720, w, h); // never upscaled
+			CHECK(w == 1280 && h == 720);
+			Media::VideoSizeFor(Media::VideoResolution::Source1440, 854, 480, w, h);
+			CHECK(w == 854 && h == 480);
+			Media::VideoSizeFor(Media::VideoResolution::Source720, 0, 0, w, h); // not known yet
+			CHECK(w == 1280 && h == 720);
+
+			Media::SetVideoSourceSize(1280, 720);
+			Media::SetVideoResolution(Media::VideoResolution::Source720);
+			const uint32_t dec0 = phone.decoded, err0 = phone.decode_errors, changes0 = phone.size_changes;
+			phone.latencies_ms.clear();
+			phone.Run(2000);
+			const uint32_t dec_hd = phone.decoded - dec0;
+			const uint32_t start_hd = phone.bitrates.empty() ? 0 : phone.bitrates.back();
+			printf("1280x720 source, \"source resolution\": fragments say %ux%u, decoder rebuilt %u, decoded %u in 2 s, "
+				"decode errors %u, capture->decoded median %.1f ms, bitrate now %u kbit/s\n",
+				phone.last_fragment_width, phone.last_fragment_height, phone.size_changes - changes0, dec_hd,
+				phone.decode_errors - err0, median(phone.latencies_ms), start_hd * 10);
+			CHECK(phone.last_fragment_width == 1280 && phone.last_fragment_height == 720);
+			CHECK(phone.size_changes - changes0 == 1);
+			CHECK(dec_hd > 90); // 2 s minus the 300 ms settle and the rebuild
+			CHECK(phone.CheckImage(1280, 720));
+			printf("hub: %s\n", Media::StatusText().c_str());
+
+			Media::SetVideoResolution(Media::VideoResolution::GamePad);
+			const uint32_t dec1 = phone.decoded;
+			phone.Run(1500);
+			printf("back to 854x480: fragments say %ux%u, decoded %u in 1.5 s\n",
+				phone.last_fragment_width, phone.last_fragment_height, phone.decoded - dec1);
+			CHECK(phone.last_fragment_width == 854 && phone.last_fragment_height == 480);
+			CHECK(phone.CheckImage());
+			Media::SetVideoSourceSize(0, 0);
+		}
+
+		// 3c. the game stops and starts again (no GamePad frames for 1.5 s): the hub resumes with a
+		// keyframe, unasked
+		{
+			source.paused = true;
+			phone.Run(1500);
+			const uint32_t keys0 = phone.keyframes, req0 = phone.keyframe_requests, dec0 = phone.decoded, err0 = phone.decode_errors;
+			source.paused = false;
+			phone.Run(1000);
+			printf("after a 1.5 s pause: keyframes %u -> %u (requests %u -> %u), decoded %u, decode errors %u\n",
+				keys0, phone.keyframes, req0, phone.keyframe_requests, phone.decoded - dec0, phone.decode_errors - err0);
+			CHECK(phone.keyframes > keys0);
+			CHECK(phone.keyframe_requests == req0); // the hub sent it by itself
+			CHECK(phone.decoded - dec0 > 45);
+			CHECK(phone.decode_errors == err0);
+			CHECK(phone.CheckImage());
+		}
+
+		// 3d. Cemu restarted (frame ids from 1 again, new encoder) while the phone keeps its session, with
+		// the size changing at the same time: the phone must not treat the new frames as late
+		{
+			Media::SetVideoSourceSize(1280, 720);
+			Media::SetVideoResolution(Media::VideoResolution::Source720);
+			phone.Run(1000); // 1280x720 running, frame ids in the hundreds
+			const uint32_t last_id = phone.last_frame_id;
+			const uint32_t restarts0 = phone.assembler.Restarts(), dec0 = phone.decoded, err0 = phone.decode_errors;
+			Media::SetVideoResolution(Media::VideoResolution::GamePad);
+			Media::DebugRestartVideoStream();
+			phone.Run(2000);
+			printf("stream restart: last frame id %u -> now %u, phone restarts %u, decoded %u in 2 s, decode errors %u, fragments say %ux%u\n",
+				last_id, phone.last_frame_id, phone.assembler.Restarts() - restarts0, phone.decoded - dec0,
+				phone.decode_errors - err0, phone.last_fragment_width, phone.last_fragment_height);
+			CHECK(last_id > 200);
+			CHECK(phone.last_frame_id < last_id);
+			CHECK(phone.assembler.Restarts() - restarts0 == 1);
+			CHECK(phone.decoded - dec0 > 90);
+			CHECK(phone.last_fragment_width == 854 && phone.last_fragment_height == 480);
+			CHECK(phone.CheckImage());
+			Media::SetVideoSourceSize(0, 0);
+		}
+
+		// 3e. the 2x pack's GamePad image (2560x1440) with "up to 2560x1440": the low-latency encoder at level 5.1
+		{
+			Media::SetVideoSourceSize(2560, 1440);
+			Media::SetVideoResolution(Media::VideoResolution::Source1440);
+			const uint32_t dec0 = phone.decoded, err0 = phone.decode_errors;
+			phone.Run(2000);
+			printf("2560x1440: fragments say %ux%u, decoded %u in 2 s, decode errors %u\n", phone.last_fragment_width,
+				phone.last_fragment_height, phone.decoded - dec0, phone.decode_errors - err0);
+			CHECK(phone.last_fragment_width == 2560 && phone.last_fragment_height == 1440);
+			CHECK(phone.decoded - dec0 > 60);
+			CHECK(phone.CheckImage(2560, 1440));
+			printf("hub: %s\n", Media::StatusText().c_str());
+			Media::SetVideoResolution(Media::VideoResolution::GamePad);
+			Media::SetVideoSourceSize(0, 0);
+			phone.Run(1000);
+		}
+
 		// 4. camera: the game opens the camera -> MEDIA_CONTROL asks for it -> phone sends -> NV12 here
 		Media::SetCameraWanted(true);
 		phone.Run(400);
@@ -688,6 +951,95 @@ namespace
 			printf("hub: %s\n", Media::StatusText().c_str());
 		}
 
+		// 7. GamePad speaker: the phone plays audio (kCapAudio) and the target is the phone
+		{
+			CHECK(Media::GetSpeakerTarget() == Media::SpeakerTarget::Phone);
+			phone.Run(300);
+			CHECK(phone.last_control.flags & kControlSpeaker);
+			phone.speaker.Reset();
+			DrcTone tone;
+			tone.Start();
+			phone.Run(2000);
+			tone.Stop();
+			phone.Run(100); // the last packets
+			auto& rx = phone.speaker;
+			const double secs = (rx.last_arrival_us - rx.first_arrival_us) / 1e6;
+			const double pps = secs > 0 ? (rx.packets - 1) / secs : 0;
+			// sample for sample what the tap got: L and R of the 6-channel big-endian frames, from the first
+			size_t exact = 0;
+			for (size_t i = 0; i < rx.left.size() && rx.left[i] == tone_left(i) && rx.right[i] == tone_right(i); ++i)
+				exact++;
+			printf("speaker (phone): %u packets in %.2f s = %.1f/s (target 200), gaps %u, discontinuity flags %u, "
+				"frames %zu of %llu generated, %zu identical; mixed->received median %.1f ms, max %.1f; "
+				"arrival jitter %.1f ms; Mac device muted %u/%u AX frames\n",
+				rx.packets, secs, pps, rx.gaps, rx.discontinuities, rx.left.size(), (unsigned long long)tone.frames.load(), exact,
+				median(rx.mix_to_arrival_ms), rx.mix_to_arrival_ms.empty() ? 0 : *std::max_element(rx.mix_to_arrival_ms.begin(), rx.mix_to_arrival_ms.end()),
+				rx.max_offset - rx.min_offset, tone.muted.load(), tone.muted.load() + tone.unmuted.load());
+			CHECK(rx.packets >= 360 && rx.packets <= 420);
+			CHECK(std::abs(pps - 200) < 10);
+			CHECK(rx.gaps == 0);
+			CHECK(rx.discontinuities == 1);
+			CHECK(rx.bad_format == 0);
+			CHECK(rx.left.size() == (size_t)rx.packets * kPadAudioFrames);
+			CHECK(exact == rx.left.size() && exact > 0);
+			CHECK(tone.frames - rx.left.size() < kPadAudioFrames); // at most one packet still pending
+			CHECK(tone.unmuted == 0 && tone.muted > 600);
+			CHECK(median(rx.mix_to_arrival_ms) < 8); // packetisation (5 ms of 3 ms AX frames) + loopback
+			const std::string st = Media::StatusText();
+			printf("hub: %s\n", st.c_str());
+			CHECK(st.find("packets/s (target 200)") != std::string::npos);
+			CHECK(st.find("phone buffer 30 ms") != std::string::npos);
+
+			// both: the Mac plays too, the stream continues without a resync; stereo frames (2 channels)
+			Media::SetSpeakerTarget(Media::SpeakerTarget::Both);
+			DrcTone both;
+			both.channels = 2;
+			both.Start();
+			const uint32_t before = rx.packets;
+			phone.Run(500);
+			both.Stop();
+			printf("speaker (both): %u packets in 0.5 s, gaps %u, Mac device muted %u/%u\n", rx.packets - before, rx.gaps,
+				both.muted.load(), both.muted.load() + both.unmuted.load());
+			CHECK(rx.packets - before >= 90);
+			CHECK(both.muted == 0 && both.unmuted > 100);
+			CHECK(rx.discontinuities == 1);
+
+			// Mac: nothing to the phone, the Mac device plays
+			Media::SetSpeakerTarget(Media::SpeakerTarget::Mac);
+			phone.Run(100);
+			CHECK(!(phone.last_control.flags & kControlSpeaker));
+			DrcTone mac;
+			mac.Start();
+			const uint32_t before_mac = rx.packets;
+			phone.Run(300);
+			mac.Stop();
+			printf("speaker (Mac): %u packets, Mac device muted %u/%u\n", rx.packets - before_mac, mac.muted.load(), mac.muted.load() + mac.unmuted.load());
+			CHECK(rx.packets == before_mac);
+			CHECK(mac.muted == 0);
+
+			// a phone with audio off (no kCapAudio in HELLO): Mac, even with the target on the phone
+			Media::SetSpeakerTarget(Media::SpeakerTarget::Phone);
+			phone.caps &= ~kCapAudio;
+			CHECK(phone.Handshake());
+			DrcTone off;
+			off.Start();
+			const uint32_t before_off = rx.packets;
+			phone.Run(300);
+			off.Stop();
+			printf("speaker (phone without audio): %u packets, Mac device muted %u\n", rx.packets - before_off, off.muted.load());
+			CHECK(rx.packets == before_off && off.muted == 0);
+			printf("hub: %s\n", Media::StatusText().c_str());
+			// audio back on: a new stream, flagged as a discontinuity
+			phone.caps |= kCapAudio;
+			CHECK(phone.Handshake());
+			phone.Run(100);
+			DrcTone again;
+			again.Start();
+			phone.Run(200);
+			again.Stop();
+			CHECK(rx.discontinuities == 2);
+		}
+
 		// 6. video off: the hub stops sending
 		for (int i = 0; i < 3; ++i)
 		{
@@ -715,6 +1067,8 @@ namespace
 		control.Start(port);
 		Source source;
 		source.Start();
+		DrcTone tone; // the GamePad speaker: 440 Hz left, 1 kHz right, while a phone plays audio
+		tone.Start();
 		printf("serving on UDP %u (control) and %u (media) for %d s\n", port, port + 1, seconds);
 		fflush(stdout);
 		for (int i = 0; i < seconds; ++i)
@@ -723,6 +1077,7 @@ namespace
 			printf("%s\n", Media::StatusText().c_str());
 			fflush(stdout);
 		}
+		tone.Stop();
 		source.Stop();
 		control.Stop();
 		return 0;

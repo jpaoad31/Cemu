@@ -542,7 +542,7 @@ void MetalRenderer::CaptureRemoteGamePadFrame(LatteTextureView* texView)
     IOSurfaceRef surface = (IOSurfaceRef)RemoteGamePad::Media::GetIOSurface(pixelBuffer);
     const bool srgb = LatteGPUState.drcBufferUsesSRGB;
     int width, height;
-    RemoteGamePad::Media::GetVideoSize(width, height);
+    RemoteGamePad::Media::GetVideoBufferSize(pixelBuffer, width, height); // 854x480 or the source size (setting)
 
     auto& cache = m_remoteGamePadTextures[srgb ? 1 : 0];
     MTL::Texture* target = nullptr;
@@ -553,7 +553,8 @@ void MetalRenderer::CaptureRemoteGamePadFrame(LatteTextureView* texView)
             target = it->second;
         else
         {
-            if (cache.size() >= 16) // the pool was recreated: drop textures of old surfaces
+            // the pool was recreated (several times, or at another size): drop textures of old surfaces
+            if (cache.size() >= 16 || (!cache.empty() && (cache.begin()->second->width() != (NS::UInteger)width || cache.begin()->second->height() != (NS::UInteger)height)))
             {
                 for (auto& [s, t] : cache)
                 {

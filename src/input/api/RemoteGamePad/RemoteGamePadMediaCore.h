@@ -51,6 +51,10 @@ namespace RemoteGamePad
 		};
 
 		static constexpr size_t kMaxPending = 4;
+		// a fragment this many frames older than the newest completed frame isn't late: the sender started
+		// its stream over (frame ids from 1 again, e.g. Cemu restarted); the assembler resets (Restarts())
+		static constexpr int32_t kRestartGap = 120;
+		uint32_t Restarts() const { return m_restarts; }
 
 		// returns the frame this fragment completed, if it is decodable
 		std::optional<Frame> Add(const MediaFragment& f, uint64_t now_us);
@@ -82,6 +86,7 @@ namespace RemoteGamePad
 		bool m_have_last = false;
 		uint32_t m_last_complete = 0;
 		bool m_need_keyframe = true; // until the first keyframe
+		uint32_t m_restarts = 0;
 		Stats m_stats;
 	};
 
@@ -91,23 +96,32 @@ namespace RemoteGamePad
 	{
 	public:
 		static constexpr uint32_t kMinKbps = 1000;
-		static constexpr uint32_t kDefaultMaxKbps = 16000;
-		static constexpr uint32_t kStartKbps = 6000;
+		static constexpr uint32_t kDefaultMaxKbps = 16000; // at 854x480
+		static constexpr uint32_t kStartKbps = 6000;       // at 854x480
+		static constexpr uint32_t kMaxScaledKbps = 50000;  // default cap at large sizes
 
 		uint32_t kbps() const { return m_kbps; }
 		uint32_t max_kbps() const { return m_max; }
 		void SetMax(uint32_t max_kbps)
 		{
-			m_max = max_kbps ? std::max(max_kbps, kMinKbps) : kDefaultMaxKbps;
+			m_phone_max = max_kbps;
+			m_max = max_kbps ? std::max(max_kbps, kMinKbps) : m_default_max;
 			m_kbps = std::min(m_kbps, m_max);
 		}
+		// the video's size relative to 854x480 (pixels): the start rate and the default cap grow with
+		// its square root (720p: x1.5, 1080p: x2.24, 1440p: x3)
+		void SetPixelRatio(double ratio);
+		uint32_t start_kbps() const { return m_start; }
 		// one feedback report; returns true if the bitrate changed
 		bool OnFeedback(const VideoFeedback& f, uint64_t now_us);
-		void Reset() { m_kbps = std::min(kStartKbps, m_max); m_last_decrease_us = 0; m_clean_since_us = 0; }
+		void Reset() { m_kbps = std::min(m_start, m_max); m_last_decrease_us = 0; m_clean_since_us = 0; }
 
 	private:
 		uint32_t m_kbps = kStartKbps;
 		uint32_t m_max = kDefaultMaxKbps;
+		uint32_t m_start = kStartKbps;
+		uint32_t m_default_max = kDefaultMaxKbps;
+		uint32_t m_phone_max = 0;
 		uint64_t m_last_decrease_us = 0;
 		uint64_t m_clean_since_us = 0;
 	};

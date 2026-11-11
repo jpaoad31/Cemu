@@ -448,6 +448,31 @@ int main()
 				r = a.Add(*ParseFragment(p.data(), p.size()), 0);
 			CHECK(r && r->id == 44 && !a.NeedKeyframe());
 		}
+		// the sender starts over (Cemu restarted: frame ids from 1 again): not "late" forever, but a reset
+		// that waits for a keyframe
+		{
+			FrameAssembler a;
+			auto make = [&](uint32_t id, bool key) {
+				MediaFragment m = t;
+				m.frame_id = id;
+				m.flags = key ? kFragKeyframe : 0;
+				uint32_t sq = 0;
+				return Packetize(MsgType::VideoFragment, sq, m, frame.data(), frame.size());
+			};
+			std::optional<FrameAssembler::Frame> r;
+			for (const auto& p : make(50000, true))
+				r = a.Add(*ParseFragment(p.data(), p.size()), 0);
+			CHECK(r && r->id == 50000);
+			for (const auto& p : make(49990, false)) // late, within the gap: ignored
+				CHECK(!a.Add(*ParseFragment(p.data(), p.size()), 0));
+			CHECK(a.Restarts() == 0);
+			for (const auto& p : make(1, false)) // a P frame of the new stream: restart, wait for a keyframe
+				r = a.Add(*ParseFragment(p.data(), p.size()), 0);
+			CHECK(!r && a.Restarts() == 1 && a.NeedKeyframe());
+			for (const auto& p : make(2, true))
+				r = a.Add(*ParseFragment(p.data(), p.size()), 0);
+			CHECK(r && r->id == 2 && !a.NeedKeyframe());
+		}
 		// bad fragments are rejected by the parser
 		{
 			auto bad = packets[0];
@@ -486,6 +511,29 @@ int main()
 		auto ma2 = ParseMicAudio(ap.data(), ap.size());
 		CHECK(ma2 && ma2->sample_count == 320 && ma2->first_sample == 3200 && ma2->sample_rate == 32000);
 		CHECK(ma2 && (int16_t)(ma2->samples[2] | (ma2->samples[3] << 8)) == pcm[1]);
+
+		// 1.3: PAD_AUDIO (stereo), and the speaker fields appended to VIDEO_FEEDBACK
+		int16_t st[2 * kPadAudioFrames];
+		for (int i = 0; i < 2 * kPadAudioFrames; ++i)
+			st[i] = (int16_t)((i & 1) ? -i * 50 : i * 50);
+		PadAudio pa;
+		pa.timestamp_us = 77; pa.first_frame = 0xFFFFFF00u; pa.frame_count = kPadAudioFrames; pa.flags = kPadAudioDiscontinuity; pa.pipeline_100us = 3;
+		auto pp = BuildPadAudio(6, pa, st);
+		CHECK(pp.size() == kPadAudioHeaderSize + kPadAudioFrames * 4 && pp.size() < 1280);
+		auto pa2 = ParsePadAudio(pp.data(), pp.size());
+		CHECK(pa2 && pa2->frame_count == kPadAudioFrames && pa2->first_frame == 0xFFFFFF00u && pa2->sample_rate == 48000
+			&& pa2->format == 2 && pa2->flags == kPadAudioDiscontinuity && pa2->pipeline_100us == 3 && pa2->timestamp_us == 77);
+		CHECK(pa2 && (int16_t)(pa2->samples[6] | (pa2->samples[7] << 8)) == st[3]);
+		pp[6] -= 4; // truncated length: rejected
+		CHECK(!ParsePadAudio(pp.data(), pp.size()));
+		CHECK(!fb2->has_audio); // a 1.2 feedback
+		fb.has_audio = true; fb.audio_level_100us = 312; fb.audio_target_100us = 300; fb.audio_underruns = 1; fb.audio_late = 2;
+		fb.audio_packets = 20; fb.audio_latency_100us = 450;
+		auto fpa = BuildVideoFeedback(9, fb);
+		CHECK(fpa.size() == kVideoFeedbackSizeAudio);
+		auto fb3 = ParseVideoFeedback(fpa.data(), fpa.size());
+		CHECK(fb3 && fb3->has_audio && fb3->audio_level_100us == 312 && fb3->audio_target_100us == 300 && fb3->audio_underruns == 1
+			&& fb3->audio_late == 2 && fb3->audio_packets == 20 && fb3->audio_latency_100us == 450 && fb3->max_bitrate_kbps == 12000);
 	}
 
 	// --- bitrate controller

@@ -1,6 +1,6 @@
 // Remote GamePad media on macOS: the media UDP port (dual-stack), the GamePad video encoder
-// (VideoToolbox H.264, low-latency rate control), the phone camera decoder and the phone
-// microphone buffer. See RemoteGamePadMedia.h and the app's PROTOCOL.md ("Media").
+// (VideoToolbox H.264, low-latency rate control), the phone camera decoder, the phone
+// microphone buffer and the GamePad speaker stream to the phone (1.3). See RemoteGamePadMedia.h and the app's PROTOCOL.md ("Media").
 
 #include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 #include "input/api/RemoteGamePad/RemoteGamePadMediaCore.h"
@@ -27,15 +27,19 @@ using namespace std::chrono_literals;
 
 namespace
 {
-	constexpr int kVideoWidth = 854;
-	constexpr int kVideoHeight = 480;
 	constexpr int kVideoFps = 60;
+	constexpr uint64_t kVideoResizeSettleUs = 300000;
+	constexpr uint64_t kVideoResumeUs = 500000; // GamePad frames after a gap this long start with a keyframe // a new video size must hold this long before the encoder is rebuilt
 	constexpr int kPoolBuffers = 4;           // frames in flight between the renderer and the encoder
 	constexpr uint64_t kSubscriberTimeoutUs = 2000000; // no feedback for 2 s: stop the video
 	constexpr uint64_t kEncoderIdleUs = 10000000;      // tear the encoder down after 10 s unused
 	constexpr uint64_t kKeyframeMinIntervalUs = 200000; // honour keyframe requests at most every 200 ms
 	constexpr uint64_t kControlIntervalUs = 250000;     // MEDIA_CONTROL at 4 Hz
 	constexpr uint64_t kCameraFreshUs = 1000000;        // a phone camera frame older than this is stale
+	constexpr uint32_t kPadAudioRate = 48000;           // AX's DRC output
+	constexpr uint32_t kPadAudioPacketsPerSec = kPadAudioRate / kPadAudioFrames; // 200
+
+	int16_t from_big_endian(int16_t v) { return (int16_t)(((uint16_t)v >> 8) | ((uint16_t)v << 8)); }
 
 	uint64_t now_us()
 	{
@@ -129,6 +133,7 @@ namespace
 			m_client_valid = false;
 			m_have_subscriber = false;
 			m_video_subscribed = false;
+			UpdateSpeaker();
 		}
 
 		// ---------------- video
@@ -158,9 +163,13 @@ namespace
 		void SubmitVideoBuffer(void* p, uint64_t capture_us)
 		{
 			CVPixelBufferRef pb = (CVPixelBufferRef)p;
+			bool resumed = false;
 			{
 				// how evenly the game delivers GamePad frames
 				std::scoped_lock lock(m_stats_mutex);
+				// frames start again after a pause (game stopped and started, emulation paused, a loading
+				// stall): start with a keyframe, so the phone never depends on what it got before
+				resumed = m_last_capture_us && capture_us > m_last_capture_us + kVideoResumeUs;
 				if (m_last_capture_us && capture_us > m_last_capture_us)
 				{
 					const double ms = (capture_us - m_last_capture_us) / 1000.0;
@@ -175,8 +184,19 @@ namespace
 			}
 			{
 				std::scoped_lock lock(m_encoder_mutex);
-				if (m_session && VideoWanted())
+				const int w = (int)CVPixelBufferGetWidth(pb), h = (int)CVPixelBufferGetHeight(pb);
+				if (m_session && VideoWanted() && (w != m_encoder_width || h != m_encoder_height))
 				{
+					// rendered from the pool of an encoder that has been rebuilt at another size since
+					m_stat_capture_busy++;
+				}
+				else if (m_session && VideoWanted())
+				{
+					if (resumed)
+					{
+						cemuLog_log(LogType::Force, "Remote GamePad: GamePad frames resumed after a pause: keyframe");
+						m_force_keyframe = true;
+					}
 					CFDictionaryRef props = nullptr;
 					if (m_force_keyframe.exchange(false))
 					{
@@ -310,6 +330,87 @@ namespace
 		Media::CameraSource GetCameraSource() const { std::scoped_lock lock(m_mutex); return m_camera_source; }
 		void SetMicSource(Media::MicSource s) { std::scoped_lock lock(m_mutex); m_mic_source = s; m_control_dirty = true; }
 		Media::MicSource GetMicSource() const { std::scoped_lock lock(m_mutex); return m_mic_source; }
+		void SetSpeakerTarget(Media::SpeakerTarget t)
+		{
+			std::scoped_lock lock(m_mutex);
+			m_speaker_target = t;
+			UpdateSpeaker();
+			m_control_dirty = true;
+		}
+		Media::SpeakerTarget GetSpeakerTarget() const { std::scoped_lock lock(m_mutex); return m_speaker_target; }
+		void SetVideoResolution(Media::VideoResolution r) { m_video_resolution = (int)r; }
+		void DebugRestartVideoStream() { m_debug_restart = true; }
+		Media::VideoResolution GetVideoResolution() const { return (Media::VideoResolution)m_video_resolution.load(); }
+		void SetVideoSourceSize(int w, int h)
+		{
+			m_source_width.store(w, std::memory_order_relaxed);
+			m_source_height.store(h, std::memory_order_relaxed);
+		}
+		void WantedVideoSize(int& w, int& h) const
+		{
+			Media::VideoSizeFor(GetVideoResolution(), m_source_width.load(std::memory_order_relaxed), m_source_height.load(std::memory_order_relaxed), w, h);
+		}
+
+		// ---------------- GamePad speaker (PAD_AUDIO, 1.3)
+
+		// AX thread, every 3 ms DRC frame (AIInitDRCDMA). Only a few atomics when no phone listens.
+		bool SubmitPadAudio(const int16_t* be, size_t frames, size_t channels)
+		{
+			if (!m_speaker_active.load(std::memory_order_relaxed) || !be || channels == 0 || channels > 8 || frames > 4096)
+				return false;
+			const uint64_t now = now_us();
+			std::vector<std::vector<uint8_t>> packets;
+			Net::UdpAddr to;
+			{
+				std::scoped_lock lock(m_pad_mutex);
+				if (m_pad_restart)
+				{
+					m_pad_restart = false;
+					m_pad_pending.clear();
+					m_pad_discontinuity = true;
+				}
+				if (m_pad_pending.empty())
+					m_pad_pending_us = now;
+				const size_t base = m_pad_pending.size();
+				m_pad_pending.resize(base + frames * 2);
+				int16_t* dst = m_pad_pending.data() + base;
+				for (size_t f = 0; f < frames; ++f)
+				{
+					const int16_t l = from_big_endian(be[f * channels]);
+					dst[2 * f] = l;
+					dst[2 * f + 1] = channels >= 2 ? from_big_endian(be[f * channels + 1]) : l;
+				}
+				m_stat_pad_submitted += frames;
+				size_t used = 0;
+				while (m_pad_pending.size() - used >= 2u * kPadAudioFrames)
+				{
+					PadAudio a;
+					a.timestamp_us = m_pad_pending_us;
+					a.first_frame = m_pad_counter;
+					a.sample_rate = kPadAudioRate;
+					a.frame_count = kPadAudioFrames;
+					a.flags = m_pad_discontinuity ? kPadAudioDiscontinuity : 0;
+					a.pipeline_100us = (uint16_t)std::min<uint64_t>((now - m_pad_pending_us) / 100, 0xFFFF);
+					m_stat_pad_pipeline.Add((now - m_pad_pending_us) / 1000.0);
+					packets.push_back(BuildPadAudio(m_pad_seq++, a, m_pad_pending.data() + used));
+					used += 2u * kPadAudioFrames;
+					m_pad_counter += kPadAudioFrames;
+					m_pad_discontinuity = false;
+					m_pad_pending_us = now; // the rest came with this AX frame
+				}
+				if (used)
+					m_pad_pending.erase(m_pad_pending.begin(), m_pad_pending.begin() + used);
+				to = m_pad_to;
+			}
+			for (const auto& p : packets)
+			{
+				if (SendTo(p, to))
+					m_stat_pad_packets++;
+				else
+					m_stat_send_errors++;
+			}
+			return m_speaker_mute_mac.load(std::memory_order_relaxed);
+		}
 
 		std::string StatusText()
 		{
@@ -324,9 +425,9 @@ namespace
 			else
 			{
 				const auto& p = m_phone;
-				s = fmt::format("Video: {:.0f} fps sent, {:.2f} Mbit/s (target {:.1f}); phone shows {:.0f} fps, latency ~{:.0f} ms "
+				s = fmt::format("Video {}x{}: {:.0f} fps sent, {:.2f} Mbit/s (target {:.1f}); phone shows {:.0f} fps, latency ~{:.0f} ms "
 					"(Mac {:.1f}, arrival {:.1f}, decode {:.1f}), dropped {}/s{}",
-					m_rate.fps, m_rate.mbps, m_bitrate.kbps() / 1000.0, p.display_fps_x10 / 10.0, p.latency_100us / 10.0,
+					m_encoder_width.load(), m_encoder_height.load(), m_rate.fps, m_rate.mbps, m_bitrate.kbps() / 1000.0, p.display_fps_x10 / 10.0, p.latency_100us / 10.0,
 					m_rate.pipeline_ms, p.assembly_100us / 10.0, p.decode_100us / 10.0,
 					p.interval_ms ? (uint32_t)(p.frames_dropped * 1000 / p.interval_ms) : 0,
 					m_session ? "" : " (encoder starting)");
@@ -349,11 +450,58 @@ namespace
 			else
 				mic = "Cemu's input device";
 			s += fmt::format("\nCamera: {} | Mic: {}", cam, mic);
+			s += "\n" + SpeakerStatus();
 			return s;
 		}
 
 	private:
 		// m_mutex held
+		std::string SpeakerStatus() const
+		{
+			if (m_speaker_target == Media::SpeakerTarget::Mac)
+				return "GamePad speaker: Mac (Cemu's GamePad audio device)";
+			if (!m_speaker_active)
+				return !PhoneAlive() ? "GamePad speaker: Mac (no phone connected)"
+					: (m_client_caps & kCapAudio) ? "GamePad speaker: Mac (starting)" : "GamePad speaker: Mac (GamePad audio is off on the phone, or an older app)";
+			std::string s = fmt::format("GamePad speaker: {}, {:.0f} packets/s (target {}), {:.2f} Mbit/s, mixed->sent {:.1f} ms",
+				m_speaker_target == Media::SpeakerTarget::Both ? "phone + Mac" : "phone (Mac device silent)",
+				m_rate.pad_pps, kPadAudioPacketsPerSec, m_rate.pad_pps * (kPadAudioHeaderSize + kPadAudioFrames * 4) * 8 / 1e6,
+				m_rate.pad_pipeline_ms);
+			if (m_rate.pad_pps < 1)
+				s += " (no GamePad audio from the game: none running, or paused)";
+			const auto& a = m_phone_audio;
+			if (a.has_audio && now_us() - m_phone_audio_us < kSubscriberTimeoutUs)
+				s += fmt::format("; phone buffer {:.0f} ms (target {:.0f}), latency ~{:.0f} ms, received {}/s, underruns {}, late/dropped {}",
+					a.audio_level_100us / 10.0, a.audio_target_100us / 10.0, a.audio_latency_100us / 10.0,
+					a.interval_ms ? a.audio_packets * 1000 / a.interval_ms : 0, a.audio_underruns, a.audio_late);
+			return s;
+		}
+
+		// m_mutex held: who gets the GamePad speaker
+		void UpdateSpeaker()
+		{
+			const bool active = m_udp.IsOpen() && PhoneAlive() && (m_client_caps & kCapAudio) && m_speaker_target != Media::SpeakerTarget::Mac;
+			if (active)
+			{
+				std::scoped_lock lock(m_pad_mutex);
+				m_pad_to = m_sub;
+			}
+			m_speaker_mute_mac = active && m_speaker_target == Media::SpeakerTarget::Phone;
+			if (active != m_speaker_active.load())
+			{
+				if (active)
+				{
+					std::scoped_lock lock(m_pad_mutex);
+					m_pad_restart = true;
+				}
+				m_speaker_active = active;
+				m_control_dirty = true;
+				cemuLog_log(LogType::Force, "Remote GamePad: GamePad speaker {}", active
+					? (m_speaker_target == Media::SpeakerTarget::Both ? "to the phone and the Mac" : "to the phone (the Mac's GamePad device plays silence)")
+					: "back on the Mac");
+			}
+		}
+
 		bool PhoneAlive() const { return m_client_valid && m_have_subscriber && now_us() - m_last_feedback_us <= kSubscriberTimeoutUs; }
 
 		void Loop()
@@ -378,12 +526,56 @@ namespace
 						cemuLog_log(LogType::Force, "Remote GamePad: video stopped (no feedback from the phone)");
 						m_video_subscribed = false;
 					}
+					UpdateSpeaker();
+				}
+				if (m_debug_restart.exchange(false) && m_session)
+				{
+					DestroyEncoder(false); // completes its frames first
+					m_frame_id = 1;
+					cemuLog_log(LogType::Force, "Remote GamePad: (test) video stream restarted, frame ids from 1");
 				}
 				if (want_video)
 				{
 					m_last_video_use_us = now;
+					int want_w, want_h;
+					WantedVideoSize(want_w, want_h);
+					if (want_w == m_failed_width && want_h == m_failed_height)
+					{
+						want_w = 854; // VideoToolbox couldn't encode that size: the GamePad's own size instead
+						want_h = 480;
+					}
+					if (m_session && (want_w != m_encoder_width || want_h != m_encoder_height))
+					{
+						// the setting or the source size changed: rebuild once the new size has held a moment
+						if (want_w != m_resize_width || want_h != m_resize_height)
+						{
+							m_resize_width = want_w;
+							m_resize_height = want_h;
+							m_resize_since_us = now;
+						}
+						else if (now - m_resize_since_us >= kVideoResizeSettleUs)
+						{
+							cemuLog_log(LogType::Force, "Remote GamePad: video size {}x{} -> {}x{}", m_encoder_width.load(), m_encoder_height.load(), want_w, want_h);
+							DestroyEncoder(false);
+						}
+					}
 					if (!m_session)
-						CreateEncoder();
+					{
+						{
+							// start rate and default cap by size (6 / 16 Mbit/s at 854x480)
+							std::scoped_lock lock(m_mutex);
+							m_bitrate.SetPixelRatio((double)want_w * want_h / (854.0 * 480.0));
+							if (m_encoder_width != 0 && (want_w != m_encoder_width || want_h != m_encoder_height))
+								m_bitrate.Reset(); // a new size: start again from its start rate (a new subscriber resets in OnFeedback)
+						}
+						CreateEncoder(want_w, want_h);
+						if (!m_session && (want_w != 854 || want_h != 480))
+						{
+							cemuLog_log(LogType::Force, "Remote GamePad: no H.264 encoder at {}x{}: sending 854x480 instead", want_w, want_h);
+							m_failed_width = want_w;
+							m_failed_height = want_h;
+						}
+					}
 				}
 				else if (m_session && now - m_last_video_use_us > kEncoderIdleUs)
 					DestroyEncoder();
@@ -458,6 +650,11 @@ namespace
 				}
 				m_video_subscribed = video;
 				m_last_feedback_us = now;
+				if (f.has_audio)
+				{
+					m_phone_audio = f;
+					m_phone_audio_us = now;
+				}
 				m_bitrate.SetMax(f.max_bitrate_kbps);
 				if (video && f.interval_ms)
 				{
@@ -476,7 +673,7 @@ namespace
 
 		// ---------------- encoder
 
-		void CreateEncoder()
+		void CreateEncoder(int width, int height)
 		{
 			std::scoped_lock lock(m_encoder_mutex);
 			if (m_session)
@@ -485,27 +682,28 @@ namespace
 			set_bool(spec, kVTVideoEncoderSpecification_EnableLowLatencyRateControl, true);
 			CFMutableDictionaryRef src = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 			set_int(src, kCVPixelBufferPixelFormatTypeKey, kCVPixelFormatType_32BGRA);
-			set_int(src, kCVPixelBufferWidthKey, kVideoWidth);
-			set_int(src, kCVPixelBufferHeightKey, kVideoHeight);
+			set_int(src, kCVPixelBufferWidthKey, width);
+			set_int(src, kCVPixelBufferHeightKey, height);
 			set_bool(src, kCVPixelBufferMetalCompatibilityKey, true);
 			CFDictionaryRef empty = CFDictionaryCreate(nullptr, nullptr, nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 			CFDictionarySetValue(src, kCVPixelBufferIOSurfacePropertiesKey, empty);
 			CFRelease(empty);
 
 			VTCompressionSessionRef session = nullptr;
-			OSStatus st = VTCompressionSessionCreate(nullptr, kVideoWidth, kVideoHeight, kCMVideoCodecType_H264, spec, src, nullptr, &MediaHub::EncodedCallback, this, &session);
+			OSStatus st = VTCompressionSessionCreate(nullptr, width, height, kCMVideoCodecType_H264, spec, src, nullptr, &MediaHub::EncodedCallback, this, &session);
 			m_low_latency = st == noErr;
 			if (st != noErr)
 			{
 				// no low-latency encoder: a plain real-time one with a short GOP instead
-				st = VTCompressionSessionCreate(nullptr, kVideoWidth, kVideoHeight, kCMVideoCodecType_H264, nullptr, src, nullptr, &MediaHub::EncodedCallback, this, &session);
+				cemuLog_log(LogType::Force, "Remote GamePad: no low-latency H.264 encoder at {}x{} ({}), using the real-time one", width, height, (int)st);
+				st = VTCompressionSessionCreate(nullptr, width, height, kCMVideoCodecType_H264, nullptr, src, nullptr, &MediaHub::EncodedCallback, this, &session);
 			}
 			CFRelease(spec);
 			if (st != noErr || !session)
 			{
 				CFRelease(src);
 				if (!m_logged_encoder_error)
-					cemuLog_log(LogType::Force, "Remote GamePad: can't create the H.264 encoder ({})", (int)st);
+					cemuLog_log(LogType::Force, "Remote GamePad: can't create the H.264 encoder at {}x{} ({})", width, height, (int)st);
 				m_logged_encoder_error = true;
 				return;
 			}
@@ -542,13 +740,15 @@ namespace
 			}
 			m_session = session;
 			m_pool = pool;
+			m_encoder_width = width;
+			m_encoder_height = height;
 			m_force_keyframe = true;
 			cemuLog_log(LogType::Force, "Remote GamePad: H.264 encoder {}x{} @ {} fps, {} rate control, slices {}, {:.1f} Mbit/s",
-				kVideoWidth, kVideoHeight, kVideoFps, m_low_latency ? "low-latency" : "real-time (keyframes on request, safety every 10 s)",
+				width, height, kVideoFps, m_low_latency ? "low-latency" : "real-time (keyframes on request, safety every 10 s)",
 				m_slices_supported ? "~1 per datagram" : "encoder default", m_bitrate.kbps() / 1000.0);
 		}
 
-		void DestroyEncoder()
+		void DestroyEncoder(bool log = true)
 		{
 			VTCompressionSessionRef session = nullptr;
 			CVPixelBufferPoolRef pool = nullptr;
@@ -565,7 +765,8 @@ namespace
 				VTCompressionSessionCompleteFrames(session, kCMTimeInvalid);
 				VTCompressionSessionInvalidate(session);
 				CFRelease(session);
-				cemuLog_log(LogType::Force, "Remote GamePad: video encoder stopped");
+				if (log)
+					cemuLog_log(LogType::Force, "Remote GamePad: video encoder stopped");
 			}
 			if (pool)
 				CVPixelBufferPoolRelease(pool);
@@ -677,8 +878,11 @@ namespace
 			t.codec = kCodecH264;
 			t.flags = (keyframe ? kFragKeyframe : 0) | (m_low_latency ? kFragLowLatencyEncoder : 0);
 			t.timestamp_us = capture_us;
-			t.width = kVideoWidth;
-			t.height = kVideoHeight;
+			{
+				const CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(CMSampleBufferGetFormatDescription(sb));
+				t.width = (uint16_t)dim.width;
+				t.height = (uint16_t)dim.height;
+			}
 			const uint64_t send_us = now_us();
 			t.pipeline_100us = (uint16_t)std::min<uint64_t>((send_us - capture_us) / 100, 0xFFFF);
 			t.bitrate_10kbps = (uint16_t)std::min<uint32_t>(m_bitrate.kbps() / 10, 0xFFFF);
@@ -710,6 +914,14 @@ namespace
 			r.interval_max = m_stat_interval_max;
 			r.hist = m_stat_interval_hist;
 			r.busy = m_stat_capture_busy.exchange(0);
+			r.pad_pps = m_stat_pad_packets.exchange(0) / secs;
+			{
+				std::scoped_lock pl(m_pad_mutex);
+				r.pad_pipeline_ms = m_stat_pad_pipeline.Mean();
+				m_stat_pad_pipeline = {};
+				r.pad_fps = m_stat_pad_submitted / secs;
+				m_stat_pad_submitted = 0;
+			}
 			m_stat_captures = 0;
 			m_stat_interval = {};
 			m_stat_interval_sq = 0;
@@ -739,6 +951,8 @@ namespace
 					c.flags |= kControlCamera;
 				if (m_mic_wanted && m_mic_source == Media::MicSource::Auto && (m_client_caps & kCapMic))
 					c.flags |= kControlMic;
+				if (m_speaker_active)
+					c.flags |= kControlSpeaker;
 			}
 			if ((c.flags & kControlCamera) && (camera_keyframe || m_camera_assembler.NeedKeyframe()))
 			{
@@ -757,7 +971,10 @@ namespace
 		{
 			if (!m_camera_wanted)
 				return;
+			const uint32_t restarts = m_camera_assembler.Restarts();
 			auto frame = m_camera_assembler.Add(f, now_us());
+			if (m_camera_assembler.Restarts() != restarts)
+				cemuLog_log(LogType::Force, "Remote GamePad: the phone restarted its camera stream (frame id {}); waiting for a keyframe", f.frame_id);
 			if (m_camera_assembler.NeedKeyframe() && now_us() - m_last_camera_key_request_us > kKeyframeMinIntervalUs)
 				SendControl(true);
 			if (!frame || frame->codec != kCodecH264)
@@ -918,6 +1135,7 @@ namespace
 			double capture_fps = 0, interval_ms = 0, interval_sd = 0, interval_max = 0;
 			std::array<uint32_t, 5> hist{}; // capture intervals <12, 12-20, 20-28, 28-40, >=40 ms
 			uint32_t busy = 0;              // frames skipped: encoder behind (no free buffer)
+			double pad_pps = 0, pad_pipeline_ms = 0, pad_fps = 0; // GamePad speaker: packets/s sent, mixed -> sent, sample frames/s from AX
 		};
 
 		std::mutex m_start_mutex;
@@ -947,6 +1165,9 @@ namespace
 		std::atomic_bool m_control_dirty = false;
 		std::atomic_bool m_camera_wanted = false;
 		std::atomic_bool m_mic_wanted = false;
+		Media::SpeakerTarget m_speaker_target = Media::SpeakerTarget::Phone;
+		VideoFeedback m_phone_audio{}; // newest feedback with the speaker fields
+		uint64_t m_phone_audio_us = 0;
 
 		// encoder
 		std::mutex m_encoder_mutex;
@@ -955,6 +1176,13 @@ namespace
 		bool m_low_latency = false, m_slices_supported = false, m_logged_encoder_error = false;
 		std::atomic_bool m_video_wanted = false;
 		std::atomic_bool m_force_keyframe = false;
+		std::atomic_int m_video_resolution = (int)Media::VideoResolution::GamePad;
+		std::atomic_int m_source_width = 0, m_source_height = 0; // the DRC image on the host
+		std::atomic_int m_encoder_width = 0, m_encoder_height = 0;
+		int m_resize_width = 0, m_resize_height = 0; // receive thread
+		std::atomic_bool m_debug_restart = false;
+		int m_failed_width = 0, m_failed_height = 0; // a size the encoder couldn't be created at (receive thread)
+		uint64_t m_resize_since_us = 0;
 		uint64_t m_last_video_use_us = 0;
 		uint32_t m_frame_id = 1;
 		uint32_t m_video_seq = 0;
@@ -982,6 +1210,19 @@ namespace
 		CVPixelBufferRef m_camera_latest = nullptr;
 		uint64_t m_camera_latest_us = 0;
 
+		// GamePad speaker (PAD_AUDIO): AX thread, under m_pad_mutex (taken after m_mutex, never before)
+		std::atomic_bool m_speaker_active = false;   // a phone plays it and the target isn't Mac
+		std::atomic_bool m_speaker_mute_mac = false; // target Phone: the Mac's GamePad device gets silence
+		std::atomic_uint32_t m_stat_pad_packets = 0;
+		std::mutex m_pad_mutex;
+		Net::UdpAddr m_pad_to{};
+		bool m_pad_restart = false, m_pad_discontinuity = true;
+		std::vector<int16_t> m_pad_pending; // interleaved stereo, < one packet
+		uint64_t m_pad_pending_us = 0;
+		uint32_t m_pad_counter = 0, m_pad_seq = 0;
+		uint64_t m_stat_pad_submitted = 0;
+		Avg m_stat_pad_pipeline;
+
 		// microphone
 		mutable std::mutex m_mic_mutex;
 		MicJitterBuffer m_mic{32000};
@@ -1006,9 +1247,20 @@ namespace RemoteGamePad::Media
 	CameraSource GetCameraSource() { return Hub().GetCameraSource(); }
 	void SetMicSource(MicSource s) { Hub().SetMicSource(s); }
 	MicSource GetMicSource() { return Hub().GetMicSource(); }
+	void SetSpeakerTarget(SpeakerTarget t) { Hub().SetSpeakerTarget(t); }
+	SpeakerTarget GetSpeakerTarget() { return Hub().GetSpeakerTarget(); }
+	bool SubmitPadAudio(const int16_t* be, size_t frames, size_t channels) { return Hub().SubmitPadAudio(be, frames, channels); }
 
 	bool VideoWanted() { return Hub().VideoWanted(); }
-	void GetVideoSize(int& w, int& h) { w = kVideoWidth; h = kVideoHeight; }
+	void DebugRestartVideoStream() { Hub().DebugRestartVideoStream(); }
+	void SetVideoResolution(VideoResolution r) { Hub().SetVideoResolution(r); }
+	VideoResolution GetVideoResolution() { return Hub().GetVideoResolution(); }
+	void SetVideoSourceSize(int w, int h) { Hub().SetVideoSourceSize(w, h); }
+	void GetVideoBufferSize(void* pb, int& w, int& h)
+	{
+		w = pb ? (int)CVPixelBufferGetWidth((CVPixelBufferRef)pb) : 0;
+		h = pb ? (int)CVPixelBufferGetHeight((CVPixelBufferRef)pb) : 0;
+	}
 	void* AcquireVideoBuffer() { return Hub().AcquireVideoBuffer(); }
 	void SubmitVideoBuffer(void* pb, uint64_t capture_us) { Hub().SubmitVideoBuffer(pb, capture_us); }
 	void ReleaseVideoBuffer(void* pb) { if (pb) CVPixelBufferRelease((CVPixelBufferRef)pb); }

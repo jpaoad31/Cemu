@@ -8,6 +8,8 @@ namespace RemoteGamePad::Media
 	{
 		CameraSource s_camera = CameraSource::Auto;
 		MicSource s_mic = MicSource::Auto;
+		SpeakerTarget s_speaker = SpeakerTarget::Phone;
+		VideoResolution s_video = VideoResolution::GamePad;
 	}
 	bool IsSupported() { return false; }
 	bool Start(uint16_t, std::string& error) { error = "not supported on this platform"; return false; }
@@ -19,8 +21,15 @@ namespace RemoteGamePad::Media
 	CameraSource GetCameraSource() { return s_camera; }
 	void SetMicSource(MicSource s) { s_mic = s; }
 	MicSource GetMicSource() { return s_mic; }
+	void SetSpeakerTarget(SpeakerTarget t) { s_speaker = t; }
+	SpeakerTarget GetSpeakerTarget() { return s_speaker; }
+	bool SubmitPadAudio(const int16_t*, size_t, size_t) { return false; }
 	bool VideoWanted() { return false; }
-	void GetVideoSize(int& w, int& h) { w = 854; h = 480; }
+	void DebugRestartVideoStream() {}
+	void SetVideoResolution(VideoResolution r) { s_video = r; }
+	VideoResolution GetVideoResolution() { return s_video; }
+	void SetVideoSourceSize(int, int) {}
+	void GetVideoBufferSize(void*, int& w, int& h) { w = 854; h = 480; }
 	void* AcquireVideoBuffer() { return nullptr; }
 	void SubmitVideoBuffer(void*, uint64_t) {}
 	void ReleaseVideoBuffer(void*) {}
