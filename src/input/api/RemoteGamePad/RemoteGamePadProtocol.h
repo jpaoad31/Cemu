@@ -16,8 +16,9 @@ namespace RemoteGamePad
 {
 	constexpr uint8_t kMagic[4] = {'W', 'U', 'G', 'P'};
 	constexpr uint8_t kVersion = 1;
-	// minor revision, announced in HELLO; 1.1 appends press counters to INPUT
-	constexpr uint16_t kMinorVersion = 1;
+	// minor revision, announced in HELLO; 1.1 appends press counters to INPUT, 1.2 adds the media
+	// port (GamePad video to the phone, the phone's camera and microphone to the host)
+	constexpr uint16_t kMinorVersion = 2;
 	constexpr uint16_t kDefaultPort = 26770;
 	constexpr size_t kHeaderSize = 12;
 	constexpr size_t kMaxPacketSize = 1400;
@@ -29,7 +30,13 @@ namespace RemoteGamePad
 		Input = 0x03,    // phone -> host, ~120 Hz
 		Bye = 0x04,      // either direction
 		InputAck = 0x05, // host -> phone, ~16 Hz: latency echo
-		// 0x10-0x1F: video (phase 2, separate stream), 0x20-0x2F: rumble, 0x30-0x3F: audio (phase 3)
+		// 1.2, on the media port (HELLO_ACK.video_port):
+		VideoFragment = 0x10,  // host -> phone: a piece of an encoded GamePad frame
+		VideoFeedback = 0x11,  // phone -> host, ~10 Hz: subscribes; stats, keyframe requests
+		CameraFragment = 0x18, // phone -> host: a piece of an encoded front-camera frame
+		MediaControl = 0x19,   // host -> phone, ~4 Hz: camera/microphone wanted, camera keyframe request
+		MicAudio = 0x30,       // phone -> host: microphone PCM
+		// 0x20-0x2F: rumble (phase 3), 0x31-0x3F: speaker audio (phase 3)
 	};
 
 	// Wii U GamePad buttons, already mapped by position on the phone
@@ -130,6 +137,8 @@ namespace RemoteGamePad
 		kCapVideo = 1 << 2,  // phase 2
 		kCapRumble = 1 << 3, // phase 3
 		kCapAudio = 1 << 4,  // phase 3
+		kCapCamera = 1 << 5, // 1.2: the phone can send its front camera
+		kCapMic = 1 << 6,    // 1.2: the phone can send its microphone
 	};
 
 	struct Header
@@ -154,7 +163,7 @@ namespace RemoteGamePad
 	{
 		uint32_t client_id = 0;
 		uint16_t capabilities = 0;
-		uint16_t video_port = 0; // 0: no video stream (phase 1)
+		uint16_t video_port = 0; // media port (1.2), 0: no media
 		std::string host_name;
 	};
 
@@ -283,6 +292,102 @@ namespace RemoteGamePad
 		std::array<uint8_t, kButtonCount> m_counts{};
 		uint8_t m_touch_count = 0;
 	};
+
+	// ---- 1.2: media port messages (PROTOCOL.md "Media")
+
+	enum Codec : uint8_t
+	{
+		kCodecH264 = 1, // AVCC: NAL units with 4-byte big-endian lengths; keyframes start with SPS, PPS
+	};
+
+	enum FragmentFlags : uint8_t
+	{
+		kFragKeyframe = 1 << 0, // IDR frame (carries its parameter sets)
+		kFragLowLatencyEncoder = 1 << 1, // video: the host uses low-latency rate control (keyframes only on request)
+	};
+
+	// VIDEO_FRAGMENT (0x10) and CAMERA_FRAGMENT (0x18): one piece of an encoded frame
+	struct MediaFragment
+	{
+		uint32_t frame_id = 0;       // +1 per encoded frame
+		uint16_t index = 0;          // fragment index within the frame
+		uint16_t count = 0;          // fragments in the frame
+		uint8_t codec = kCodecH264;
+		uint8_t flags = 0;           // FragmentFlags
+		uint16_t first_slice = 0xFFFF; // index of the first slice NAL unit starting in this fragment, 0xFFFF none
+		uint64_t timestamp_us = 0;   // capture time, sender's monotonic clock
+		uint32_t frame_size = 0;     // bytes in the whole frame
+		uint32_t offset = 0;         // where this fragment's data goes in the frame
+		uint16_t width = 0, height = 0;
+		uint16_t pipeline_100us = 0; // sender: capture -> first fragment sent, 0.1 ms
+		uint16_t bitrate_10kbps = 0; // sender's current target bitrate, 10 kbit/s units
+		const uint8_t* data = nullptr; // points into the parsed packet
+		size_t data_size = 0;
+	};
+	constexpr size_t kFragmentHeaderSize = kHeaderSize + 36; // 48
+	constexpr size_t kMaxFragmentData = 1200;                // keeps datagrams under 1280 bytes (IPv6 minimum MTU)
+	constexpr uint32_t kMaxFrameSize = 4u << 20;
+
+	// VIDEO_FEEDBACK (0x11), phone -> host on the media port
+	struct VideoFeedback
+	{
+		uint32_t client_id = 0;
+		uint32_t newest_frame = 0xFFFFFFFF; // newest frame id shown, 0xFFFFFFFF none yet
+		uint16_t frames_shown = 0;          // in this interval
+		uint16_t frames_dropped = 0;        // incomplete, late or undecodable, in this interval
+		uint16_t fragments_received = 0;
+		uint16_t fragments_missing = 0;     // fragments of frames that never completed
+		uint16_t interval_ms = 0;
+		uint16_t decode_100us = 0;          // average decode time
+		uint16_t assembly_100us = 0;        // average first -> last fragment of a frame
+		uint16_t latency_100us = 0;         // phone's estimate, capture -> decoded; 0 unknown
+		uint8_t flags = 0;                  // FeedbackFlags
+		uint16_t display_fps_x10 = 0;
+		uint32_t max_bitrate_kbps = 0;      // phone's cap, 0 = host default
+	};
+	enum FeedbackFlags : uint8_t
+	{
+		kFeedbackKeyframeRequest = 1 << 0,
+		kFeedbackNoVideo = 1 << 1, // keep-alive only: don't send video
+	};
+	constexpr size_t kVideoFeedbackSize = kHeaderSize + 32; // 44
+
+	// MEDIA_CONTROL (0x19), host -> phone on the media port
+	struct MediaControl
+	{
+		uint8_t flags = 0; // ControlFlags
+		uint16_t camera_width = 640, camera_height = 480;
+		uint16_t mic_sample_rate = 32000;
+	};
+	enum ControlFlags : uint8_t
+	{
+		kControlCamera = 1 << 0,         // send the front camera
+		kControlCameraKeyframe = 1 << 1, // the host lost camera data: send a keyframe
+		kControlMic = 1 << 2,            // send the microphone
+	};
+	constexpr size_t kMediaControlSize = kHeaderSize + 8; // 20
+
+	// MIC_AUDIO (0x30), phone -> host on the media port: signed 16-bit little-endian mono PCM
+	struct MicAudio
+	{
+		uint64_t timestamp_us = 0;  // capture time of the first sample, phone clock
+		uint32_t first_sample = 0;  // running sample counter, for loss detection
+		uint16_t sample_rate = 32000;
+		uint16_t sample_count = 0;
+		uint8_t format = 1;         // 1: PCM s16le mono
+		const uint8_t* samples = nullptr; // sample_count * 2 bytes, points into the packet
+	};
+	constexpr size_t kMicHeaderSize = kHeaderSize + 20; // 32
+	constexpr size_t kMaxMicSamples = (kMaxPacketSize - kMicHeaderSize) / 2;
+
+	std::vector<uint8_t> BuildFragment(MsgType type, uint32_t seq, const MediaFragment& f);
+	std::optional<MediaFragment> ParseFragment(const uint8_t* data, size_t size); // VideoFragment or CameraFragment
+	std::vector<uint8_t> BuildVideoFeedback(uint32_t seq, const VideoFeedback& f);
+	std::optional<VideoFeedback> ParseVideoFeedback(const uint8_t* data, size_t size);
+	std::vector<uint8_t> BuildMediaControl(uint32_t seq, const MediaControl& c);
+	std::optional<MediaControl> ParseMediaControl(const uint8_t* data, size_t size);
+	std::vector<uint8_t> BuildMicAudio(uint32_t seq, const MicAudio& m, const int16_t* samples);
+	std::optional<MicAudio> ParseMicAudio(const uint8_t* data, size_t size);
 
 	// parse the 12-byte header; nullopt if magic/version/length are wrong
 	std::optional<Header> ParseHeader(const uint8_t* data, size_t size);

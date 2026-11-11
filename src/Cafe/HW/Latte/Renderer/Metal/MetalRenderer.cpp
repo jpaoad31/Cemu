@@ -22,6 +22,8 @@
 #include "Cafe/HW/Latte/Core/FetchShader.h"
 #include "Cafe/HW/Latte/Core/LatteConst.h"
 #include "config/CemuConfig.h"
+#include "config/ActiveSettings.h"
+#include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 
 #define IMGUI_IMPL_METAL_CPP
 #include "imgui/imgui_extension.h"
@@ -528,6 +530,90 @@ void MetalRenderer::DrawBackbufferQuad(LatteTextureView* texView, RendererOutput
     renderCommandEncoder->drawPrimitives(MTL::PrimitiveTypeTriangle, NS::UInteger(0), NS::UInteger(3));
 
     EndEncoding();
+}
+
+void MetalRenderer::CaptureRemoteGamePadFrame(LatteTextureView* texView)
+{
+    // render the GamePad image into an IOSurface-backed pixel buffer and hand it to the encoder once
+    // the GPU is done: no CPU copy, and VideoToolbox reads the IOSurface directly
+    void* pixelBuffer = RemoteGamePad::Media::AcquireVideoBuffer();
+    if (!pixelBuffer)
+        return;
+    IOSurfaceRef surface = (IOSurfaceRef)RemoteGamePad::Media::GetIOSurface(pixelBuffer);
+    const bool srgb = LatteGPUState.drcBufferUsesSRGB;
+    int width, height;
+    RemoteGamePad::Media::GetVideoSize(width, height);
+
+    auto& cache = m_remoteGamePadTextures[srgb ? 1 : 0];
+    MTL::Texture* target = nullptr;
+    if (surface)
+    {
+        auto it = cache.find(surface);
+        if (it != cache.end())
+            target = it->second;
+        else
+        {
+            if (cache.size() >= 16) // the pool was recreated: drop textures of old surfaces
+            {
+                for (auto& [s, t] : cache)
+                {
+                    t->release();
+                    CFRelease(s);
+                }
+                cache.clear();
+            }
+            NS_STACK_SCOPED MTL::TextureDescriptor* desc = MTL::TextureDescriptor::alloc()->init();
+            desc->setTextureType(MTL::TextureType2D);
+            desc->setPixelFormat(srgb ? MTL::PixelFormatBGRA8Unorm_sRGB : MTL::PixelFormatBGRA8Unorm);
+            desc->setWidth(width);
+            desc->setHeight(height);
+            desc->setUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead);
+            desc->setStorageMode(m_device->hasUnifiedMemory() ? MTL::StorageModeShared : MTL::StorageModeManaged);
+            target = m_device->newTexture(desc, surface, 0);
+            if (target)
+            {
+                CFRetain(surface);
+                cache.emplace(surface, target);
+            }
+        }
+    }
+    if (!target)
+    {
+        RemoteGamePad::Media::ReleaseVideoBuffer(pixelBuffer);
+        return;
+    }
+
+    MTL::Texture* source = static_cast<LatteTextureViewMtl*>(texView)->GetRGBAView();
+
+    NS_STACK_SCOPED MTL::RenderPassDescriptor* renderPassDescriptor = MTL::RenderPassDescriptor::alloc()->init();
+    auto colorAttachment = renderPassDescriptor->colorAttachments()->object(0);
+    colorAttachment->setTexture(target);
+    colorAttachment->setLoadAction(MTL::LoadActionDontCare);
+    colorAttachment->setStoreAction(MTL::StoreActionStore);
+
+    auto renderCommandEncoder = GetTemporaryRenderCommandEncoder(renderPassDescriptor);
+    auto commandBuffer = GetCommandBuffer();
+
+    const bool upsideDown = ActiveSettings::RenderUpsideDownEnabled();
+    RendererOutputShader* shader = upsideDown ? RendererOutputShader::s_copy_shader_ud : RendererOutputShader::s_copy_shader;
+    auto renderPipelineState = m_outputShaderCache->GetPipeline(shader, upsideDown ? 3 : 0, srgb);
+    renderCommandEncoder->setRenderPipelineState(renderPipelineState);
+    renderCommandEncoder->setFragmentTexture(source, 0);
+    renderCommandEncoder->setFragmentSamplerState(m_linearSampler, 0);
+    renderCommandEncoder->setViewport(MTL::Viewport{0.0, 0.0, (double)width, (double)height, 0.0, 1.0});
+    renderCommandEncoder->setScissorRect(MTL::ScissorRect{0, 0, (NS::UInteger)width, (NS::UInteger)height});
+    renderCommandEncoder->drawPrimitives(MTL::PrimitiveTypeTriangle, NS::UInteger(0), NS::UInteger(3));
+
+    const uint64 captureUs = RemoteGamePad::Media::NowUs();
+    commandBuffer->addCompletedHandler([pixelBuffer, captureUs](MTL::CommandBuffer* cb) {
+        if (cb->status() == MTL::CommandBufferStatusCompleted)
+            RemoteGamePad::Media::SubmitVideoBuffer(pixelBuffer, captureUs);
+        else
+            RemoteGamePad::Media::ReleaseVideoBuffer(pixelBuffer);
+    });
+    EndEncoding();
+    // start the GPU on it now rather than at the end of the frame
+    CommitCommandBuffer();
 }
 
 bool MetalRenderer::BeginFrame(bool mainWindow)

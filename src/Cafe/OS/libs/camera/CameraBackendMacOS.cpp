@@ -1,6 +1,7 @@
 #include "Common/precompiled.h"
 #include "CameraBackend.h"
 #include "CameraCaptureMacOS.h"
+#include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 
 namespace camera
 {
@@ -53,8 +54,87 @@ namespace camera
 		bool m_loggedFirstFrame{false};
 	};
 
+	// The GamePad camera: a connected Remote GamePad phone's front camera when there is one (and
+	// the input settings allow it), else the Mac's camera. The Mac camera is only started while
+	// it's actually the source, so the phone being there doesn't light up the Mac's camera.
+	class CameraBackendSwitching : public CameraBackend
+	{
+	public:
+		bool Start() override
+		{
+			m_running = true;
+			RemoteGamePad::Media::SetCameraWanted(true);
+			m_mac_failed = false;
+			// running either way: a phone may connect later, and no picture means black frames
+			if (!RemoteGamePad::Media::PhoneCameraSelected())
+			{
+				m_mac_failed = !StartMac();
+				return true;
+			}
+			cemuLog_log(LogType::Force, "Camera: using the Remote GamePad phone's front camera");
+			return true;
+		}
+
+		void Stop() override
+		{
+			m_running = false;
+			RemoteGamePad::Media::SetCameraWanted(false);
+			StopMac();
+		}
+
+		bool GetLatestFrameNV12(uint8* dst, uint32 width, uint32 height, uint32 pitch) override
+		{
+			const bool phone = RemoteGamePad::Media::PhoneCameraSelected();
+			if (phone != m_last_phone)
+			{
+				m_last_phone = phone;
+				m_mac_failed = false;
+				cemuLog_log(LogType::Force, "Camera: source is now {}", phone ? "the Remote GamePad phone" : "the Mac camera");
+			}
+			if (phone)
+			{
+				// the Mac camera goes off once the phone has delivered for a while
+				if (RemoteGamePad::Media::GetCameraFrameNV12(dst, width, height, pitch))
+				{
+					if (m_mac_started && ++m_phone_frames > 60)
+						StopMac();
+					return true;
+				}
+				// phone selected but no picture (yet): bridge with the Mac camera if it's running
+				return m_mac_started && m_mac.GetLatestFrameNV12(dst, width, height, pitch);
+			}
+			m_phone_frames = 0;
+			if (!m_mac_started && m_running && !m_mac_failed)
+				m_mac_failed = !StartMac();
+			return m_mac_started && m_mac.GetLatestFrameNV12(dst, width, height, pitch);
+		}
+
+		std::string GetDeviceName() const override
+		{
+			return RemoteGamePad::Media::PhoneCameraSelected() ? std::string("Remote GamePad phone") : m_mac.GetDeviceName();
+		}
+
+	private:
+		bool StartMac()
+		{
+			if (!m_mac_started)
+				m_mac_started = m_mac.Start();
+			return m_mac_started;
+		}
+		void StopMac()
+		{
+			if (m_mac_started)
+				m_mac.Stop();
+			m_mac_started = false;
+		}
+
+		CameraBackendMacOS m_mac;
+		bool m_running = false, m_mac_started = false, m_mac_failed = false, m_last_phone = false;
+		uint32 m_phone_frames = 0;
+	};
+
 	std::unique_ptr<CameraBackend> CreateCameraBackend()
 	{
-		return std::make_unique<CameraBackendMacOS>();
+		return std::make_unique<CameraBackendSwitching>();
 	}
 }

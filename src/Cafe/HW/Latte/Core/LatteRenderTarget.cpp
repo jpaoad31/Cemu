@@ -1,3 +1,4 @@
+#include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 #include "Cafe/HW/Latte/ISA/RegDefines.h"
 
 #include "Cafe/HW/Latte/Core/Latte.h"
@@ -1013,6 +1014,14 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
 	togglePressedLast = togglePressed;
 
 	bool showDRC = swkbd_hasKeyboardInputHook() == false && (isDRCPrimary ^ altScreenRequested);
+
+	// Remote GamePad video: every GamePad frame, whichever window (if any) shows it
+	if ((renderTarget & RENDER_TARGET_DRC) && RemoteGamePad::Media::VideoWanted())
+	{
+		LatteTexture_UpdateDataToLatest(texView->baseTexture);
+		LatteTC_MarkTextureStillInUse(texView->baseTexture);
+		g_renderer->CaptureRemoteGamePadFrame(texView);
+	}
 
 	if ((renderTarget & RENDER_TARGET_DRC) && g_renderer->IsPadWindowActive())
 		LatteRenderTarget_copyToBackbuffer(texView, true);

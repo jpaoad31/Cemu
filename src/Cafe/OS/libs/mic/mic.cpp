@@ -2,6 +2,7 @@
 #include "input/InputManager.h"
 #include "audio/IAudioInputAPI.h"
 #include "config/CemuConfig.h"
+#include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 
 enum class MIC_RESULT
 {
@@ -414,6 +415,22 @@ void mic_updateDevicePlayState(bool isPlaying)
 
 void mic_updateOnAXFrame()
 {
+	// Remote GamePad: the phone's microphone (32 kHz PCM over the network) while a phone with a
+	// microphone is connected and the input settings choose it
+	const bool micOpen = mic_isActive(0) || mic_isActive(1);
+	RemoteGamePad::Media::SetMicWanted(micOpen);
+	if (micOpen)
+	{
+		sint16 phoneSamples[MIC_SAMPLES_PER_3MS_32KHZ];
+		if (RemoteGamePad::Media::ReadMic(phoneSamples, MIC_SAMPLES_PER_3MS_32KHZ))
+		{
+			std::shared_lock lock(g_audioInputMutex);
+			mic_updateDevicePlayState(false);
+			mic_feedSamples(0, phoneSamples, MIC_SAMPLES_PER_3MS_32KHZ);
+			return;
+		}
+	}
+
 	sint32 drcIndex = 0;
 	if( mic_isActive(0) == false ) 
 	{

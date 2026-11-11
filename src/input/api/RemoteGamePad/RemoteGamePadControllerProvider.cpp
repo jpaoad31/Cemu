@@ -1,5 +1,6 @@
 #include "input/api/RemoteGamePad/RemoteGamePadControllerProvider.h"
 #include "input/api/RemoteGamePad/RemoteGamePadController.h"
+#include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 
 #include <boost/asio/ip/host_name.hpp>
 
@@ -79,8 +80,17 @@ void RemoteGamePadControllerProvider::reader_thread()
 					cemuLog_log(LogType::Force, "Remote GamePad: can't open {}: {}", m_transport->description(), error);
 				else if (ok)
 					cemuLog_log(LogType::Force, "Remote GamePad: listening on {}", m_transport->description());
+				// media (video, camera, mic) on the next port; one media port per Cemu
+				if (ok && RemoteGamePad::Media::IsSupported() && RemoteGamePad::Media::Port() == 0)
+				{
+					std::string media_error;
+					if (!RemoteGamePad::Media::Start(m_settings.port + 1, media_error))
+						cemuLog_log(LogType::Force, "Remote GamePad: no video/camera/mic: can't open UDP port {}: {}", m_settings.port + 1, media_error);
+				}
 				m_status.listening = ok;
 				m_status.error = ok ? std::string() : error;
+				if (ok)
+					m_status.transport = m_transport->description();
 			}
 			if (!ok)
 			{
@@ -108,6 +118,9 @@ void RemoteGamePadControllerProvider::reader_thread()
 			m_latch.Clear();
 			m_have_seq = false;
 			cemuLog_log(LogType::Force, "Remote GamePad: \"{}\" timed out", m_status.phone_name);
+			if (m_media_client)
+				RemoteGamePad::Media::ClearClient();
+			m_media_client = false;
 		}
 		m_status.connected = m_state.connected;
 		const auto window = now - m_rate_window_start;
@@ -160,6 +173,12 @@ void RemoteGamePadControllerProvider::handle_packet(const uint8_t* data, size_t 
 			m_status.phone_model = hello->device_model;
 			m_status.app_version = hello->app_version;
 			m_status.address = sender.address;
+			m_status.capabilities = hello->capabilities;
+			if (MediaPortHere())
+			{
+				RemoteGamePad::Media::SetClient(hello->client_id, hello->capabilities, hello->device_name);
+				m_media_client = true;
+			}
 		}
 		send_hello_ack(hello->client_id, sender);
 		break;
@@ -229,6 +248,9 @@ void RemoteGamePadControllerProvider::handle_packet(const uint8_t* data, size_t 
 			m_have_seq = false;
 			m_ack_pending = false;
 			m_status.connected = false;
+			if (m_media_client)
+				RemoteGamePad::Media::ClearClient();
+			m_media_client = false;
 		}
 		break;
 	}
@@ -263,12 +285,24 @@ void RemoteGamePadControllerProvider::send_hello_ack(uint32 client_id, const Pee
 	ack.client_id = client_id;
 	ack.capabilities = RemoteGamePad::kCapMotion | RemoteGamePad::kCapTouch;
 	ack.video_port = 0;
+	if (MediaPortHere())
+	{
+		ack.capabilities |= RemoteGamePad::kCapVideo | RemoteGamePad::kCapCamera | RemoteGamePad::kCapMic;
+		ack.video_port = RemoteGamePad::Media::Port();
+	}
 	boost::system::error_code ec;
 	const auto host = boost::asio::ip::host_name(ec);
 	ack.host_name = ec ? std::string("Cemu") : fmt::format("Cemu on {}", host);
 	const auto packet = RemoteGamePad::BuildHelloAck(m_send_seq++, ack);
 	if (!m_transport->send(to, packet.data(), packet.size()))
 		cemuLog_log(LogType::Force, "Remote GamePad: can't answer the hello from {}", to.address);
+}
+
+bool RemoteGamePadControllerProvider::MediaPortHere() const
+{
+	// the media port belongs to the provider on the port below it
+	const uint16 port = RemoteGamePad::Media::Port();
+	return port != 0 && port == (uint16)(m_settings.port + 1);
 }
 
 bool RemoteGamePadControllerProvider::is_connected() const
@@ -331,6 +365,9 @@ std::string RemoteGamePadControllerProvider::get_status_text() const
 	}
 	const auto name = s.phone_name.empty() ? std::string("unnamed phone") : s.phone_name;
 	const auto touch = s.touch ? fmt::format(", touch {:.3f},{:.3f}", s.touch_x, s.touch_y) : std::string();
-	return fmt::format("Listening on {}. Connected: {} ({})\n{:.0f} packets/s, longest gap {:.0f} ms (last 3 s)\nHeld: {}{}",
+	auto text = fmt::format("Listening on {}. Connected: {} ({})\n{:.0f} packets/s, longest gap {:.0f} ms (last 3 s)\nHeld: {}{}",
 		s.transport, name, s.address, s.packet_rate, s.max_gap_ms, RemoteGamePad::ButtonNames(s.buttons), touch);
+	if (MediaPortHere())
+		text += "\n" + RemoteGamePad::Media::StatusText();
+	return text;
 }

@@ -11,6 +11,7 @@
 #include <wx/notebook.h>
 #include <wx/wupdlock.h>
 #include <wx/stattext.h>
+#include <wx/choice.h>
 #include <wx/combobox.h>
 #include <wx/button.h>
 #include <wx/statline.h>
@@ -35,6 +36,7 @@
 #include "wxgui/input/settings/WiimoteControllerSettings.h"
 #include "util/EventService.h"
 #include "input/api/RemoteGamePad/RemoteGamePadController.h"
+#include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 
 #include "resource/embedded/resources.h"
 
@@ -62,6 +64,8 @@ struct ControllerPage
 	wxButton* m_controller_settings, * m_controller_calibrate, *m_controller_clear;
 	wxBitmapButton* m_controller_connected;
 	wxStaticText* m_remote_status = nullptr; // Remote GamePad: port, phone, packet rate
+	wxChoice* m_remote_camera = nullptr;     // Remote GamePad: GamePad camera source
+	wxChoice* m_remote_mic = nullptr;        // Remote GamePad: GamePad mic source
 
 	// panel
 	std::array<InputPanel*, EmulatedController::Type::MAX> m_panels{};
@@ -297,10 +301,30 @@ wxWindow* InputSettings2::initialize_page(size_t index)
 		page_data.m_controller_clear = clear;
 		page_data.m_controller_connected = connected_button;
 
+		auto* remote_sizer = new wxBoxSizer(wxVERTICAL);
 		auto* remote_status = new wxStaticText(page, wxID_ANY, wxEmptyString);
 		remote_status->Hide();
-		sizer->Add(remote_status, wxGBPosition(5, 3), wxGBSpan(1, 3), wxALIGN_CENTER_VERTICAL | wxALL, 5);
+		remote_sizer->Add(remote_status, 0, wxALL, 0);
+		auto* remote_choices = new wxBoxSizer(wxHORIZONTAL);
+		auto* remote_camera = new wxChoice(page, wxID_ANY);
+		remote_camera->Append(_("GamePad camera: phone when connected, else Mac"));
+		remote_camera->Append(_("GamePad camera: Mac camera"));
+		remote_camera->SetSelection((int)RemoteGamePad::Media::GetCameraSource());
+		remote_camera->Bind(wxEVT_CHOICE, [](wxCommandEvent& e) { RemoteGamePad::Media::SetCameraSource((RemoteGamePad::Media::CameraSource)e.GetSelection()); });
+		remote_camera->Hide();
+		auto* remote_mic = new wxChoice(page, wxID_ANY);
+		remote_mic->Append(_("GamePad mic: phone when connected"));
+		remote_mic->Append(_("GamePad mic: Cemu's audio input device"));
+		remote_mic->SetSelection((int)RemoteGamePad::Media::GetMicSource());
+		remote_mic->Bind(wxEVT_CHOICE, [](wxCommandEvent& e) { RemoteGamePad::Media::SetMicSource((RemoteGamePad::Media::MicSource)e.GetSelection()); });
+		remote_mic->Hide();
+		remote_choices->Add(remote_camera, 0, wxTOP | wxRIGHT, 5);
+		remote_choices->Add(remote_mic, 0, wxTOP, 5);
+		remote_sizer->Add(remote_choices);
+		sizer->Add(remote_sizer, wxGBPosition(5, 3), wxGBSpan(1, 3), wxALIGN_CENTER_VERTICAL | wxALL, 5);
 		page_data.m_remote_status = remote_status;
+		page_data.m_remote_camera = remote_camera;
+		page_data.m_remote_mic = remote_mic;
 
 	}
 
@@ -379,6 +403,22 @@ void InputSettings2::update_state()
 				page_data.m_controllers->SetSelection(0);
 				if (!controller_selection.empty())
 					page_data.m_controllers->SetStringSelection(controller_selection);
+				else
+				{
+					// on opening: show a Remote GamePad if there is one. It has taken over the GamePad's
+					// buttons, so the first entry (often the keyboard, with nothing mapped) looked as if
+					// the Remote GamePad hadn't been saved
+					int i = 0;
+					for (const auto& c : emulated_controller->get_controllers())
+					{
+						if (c->api() == InputAPI::RemoteGamePad)
+						{
+							page_data.m_controllers->SetSelection(i);
+							break;
+						}
+						++i;
+					}
+				}
 			}
 		}
 	}
@@ -536,6 +576,17 @@ void InputSettings2::update_remote_gamepad_status()
 
 	const auto remote = std::dynamic_pointer_cast<RemoteGamePadController>(get_active_controller());
 	auto* page = m_notebook->GetCurrentPage();
+	const bool media = remote && RemoteGamePad::Media::IsSupported();
+	for (wxChoice* c : {page_data.m_remote_camera, page_data.m_remote_mic})
+	{
+		if (c && c->IsShown() != media)
+		{
+			c->Show(media);
+			if (media) // the setting may have come from a profile load
+				c->SetSelection(c == page_data.m_remote_camera ? (int)RemoteGamePad::Media::GetCameraSource() : (int)RemoteGamePad::Media::GetMicSource());
+			page->Layout();
+		}
+	}
 	if (!remote)
 	{
 		if (text->IsShown())

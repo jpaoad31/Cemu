@@ -1,7 +1,9 @@
 // Standalone check of the Remote GamePad protocol parser (not part of the CMake build: Cemu has no test target).
 // Build and run from the repository root:
-//   clang++ -std=c++20 -Wall -I src src/input/api/RemoteGamePad/RemoteGamePadProtocolTest.cpp src/input/api/RemoteGamePad/RemoteGamePadProtocol.cpp -o /tmp/rgtest && /tmp/rgtest
+//   clang++ -std=c++20 -Wall -I src src/input/api/RemoteGamePad/RemoteGamePadProtocolTest.cpp src/input/api/RemoteGamePad/RemoteGamePadProtocol.cpp \
+//     src/input/api/RemoteGamePad/RemoteGamePadMediaCore.cpp -o /tmp/rgtest && /tmp/rgtest
 #include "input/api/RemoteGamePad/RemoteGamePadProtocol.h"
+#include "input/api/RemoteGamePad/RemoteGamePadMediaCore.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -351,6 +353,187 @@ int main()
 			CHECK(n == 1);
 		}
 		CHECK(ButtonNames(kBtnA | kBtnUp) == "A Up" && ButtonNames(0) == "none");
+	}
+
+
+	// --- 1.2 media messages
+	{
+		// a fake AVCC keyframe: SPS, PPS, three IDR slices of different sizes
+		std::vector<uint8_t> frame;
+		auto nal = [&](uint8_t header, size_t n) {
+			frame.push_back((uint8_t)(n >> 24)); frame.push_back((uint8_t)(n >> 16));
+			frame.push_back((uint8_t)(n >> 8)); frame.push_back((uint8_t)n);
+			frame.push_back(header);
+			for (size_t i = 1; i < n; ++i)
+				frame.push_back((uint8_t)(i * 7 + header));
+		};
+		nal(0x67, 12); nal(0x68, 4); nal(0x65, 1500); nal(0x65, 900); nal(0x65, 2000);
+		const auto slices = AvccSliceOffsets(frame.data(), frame.size());
+		CHECK(slices.size() == 3 && slices[0] == 16 + 8);
+
+		MediaFragment t;
+		t.frame_id = 41;
+		t.flags = kFragKeyframe;
+		t.timestamp_us = 123456789;
+		t.width = 854; t.height = 480;
+		t.pipeline_100us = 42;
+		t.bitrate_10kbps = 600;
+		uint32_t seq = 7;
+		const auto packets = Packetize(MsgType::VideoFragment, seq, t, frame.data(), frame.size());
+		CHECK(packets.size() == (frame.size() + kMaxFragmentData - 1) / kMaxFragmentData);
+		CHECK(seq == 7 + packets.size());
+		size_t total = 0;
+		for (size_t i = 0; i < packets.size(); ++i)
+		{
+			CHECK(packets[i].size() <= kFragmentHeaderSize + kMaxFragmentData);
+			const auto f = ParseFragment(packets[i].data(), packets[i].size());
+			CHECK(f && f->frame_id == 41 && f->index == i && f->count == packets.size() && f->frame_size == frame.size());
+			CHECK(f && f->width == 854 && f->height == 480 && f->timestamp_us == 123456789 && f->bitrate_10kbps == 600);
+			CHECK(f && memcmp(f->data, frame.data() + f->offset, f->data_size) == 0);
+			total += f ? f->data_size : 0;
+		}
+		CHECK(total == frame.size());
+		// first fragment holds SPS/PPS and the start of the first slice
+		CHECK(ParseFragment(packets[0].data(), packets[0].size())->first_slice == 0);
+
+		// assembler: in order -> complete keyframe
+		{
+			FrameAssembler a;
+			std::optional<FrameAssembler::Frame> out;
+			for (const auto& p : packets)
+			{
+				CHECK(!out);
+				out = a.Add(*ParseFragment(p.data(), p.size()), 1000);
+			}
+			CHECK(out && out->data == frame && out->id == 41 && out->keyframe());
+			CHECK(!a.NeedKeyframe());
+			auto st = a.TakeStats();
+			CHECK(st.frames_complete == 1 && st.frames_dropped == 0 && st.fragments == packets.size());
+		}
+		// out of order and duplicated fragments still complete once
+		{
+			FrameAssembler a;
+			int completions = 0;
+			for (int i = (int)packets.size() - 1; i >= 0; --i)
+				for (int k = 0; k < 2; ++k)
+					completions += a.Add(*ParseFragment(packets[i].data(), packets[i].size()), 1000).has_value();
+			CHECK(completions == 1);
+		}
+		// a lost fragment: the frame never completes; the next P frame is dropped until a keyframe
+		{
+			FrameAssembler a;
+			for (const auto& p : packets)
+				a.Add(*ParseFragment(p.data(), p.size()), 0); // keyframe 41 complete
+			auto make = [&](uint32_t id, bool key) {
+				MediaFragment m = t;
+				m.frame_id = id;
+				m.flags = key ? kFragKeyframe : 0;
+				uint32_t sq = 0;
+				return Packetize(MsgType::VideoFragment, sq, m, frame.data(), frame.size());
+			};
+			auto p42 = make(42, false);
+			for (size_t i = 1; i < p42.size(); ++i) // fragment 0 lost
+				CHECK(!a.Add(*ParseFragment(p42[i].data(), p42[i].size()), 0));
+			auto p43 = make(43, false);
+			std::optional<FrameAssembler::Frame> r;
+			for (const auto& p : p43)
+				r = a.Add(*ParseFragment(p.data(), p.size()), 0);
+			CHECK(!r && a.NeedKeyframe()); // 42 is missing: 43 can't be decoded
+			auto st = a.TakeStats();
+			CHECK(st.frames_dropped == 2 && st.fragments_missing == 1);
+			// late fragment of 42 is ignored now
+			CHECK(!a.Add(*ParseFragment(p42[0].data(), p42[0].size()), 0));
+			auto p44 = make(44, true);
+			for (const auto& p : p44)
+				r = a.Add(*ParseFragment(p.data(), p.size()), 0);
+			CHECK(r && r->id == 44 && !a.NeedKeyframe());
+		}
+		// bad fragments are rejected by the parser
+		{
+			auto bad = packets[0];
+			bad[12 + 6] = 0; bad[12 + 7] = 0; // count 0
+			CHECK(!ParseFragment(bad.data(), bad.size()));
+			auto bad2 = packets[0];
+			bad2[12 + 20] = 1; bad2[12 + 21] = 0; bad2[12 + 22] = 0; bad2[12 + 23] = 0; // frame size 1 < data
+			CHECK(!ParseFragment(bad2.data(), bad2.size()));
+		}
+
+		// feedback, control, mic round trips
+		VideoFeedback fb;
+		fb.client_id = 0xCAFEF00D; fb.newest_frame = 99; fb.frames_shown = 6; fb.frames_dropped = 1;
+		fb.fragments_received = 300; fb.fragments_missing = 2; fb.interval_ms = 100; fb.decode_100us = 23;
+		fb.assembly_100us = 11; fb.latency_100us = 250; fb.flags = kFeedbackKeyframeRequest; fb.display_fps_x10 = 599;
+		fb.max_bitrate_kbps = 12000;
+		auto fp = BuildVideoFeedback(3, fb);
+		CHECK(fp.size() == kVideoFeedbackSize);
+		auto fb2 = ParseVideoFeedback(fp.data(), fp.size());
+		CHECK(fb2 && fb2->client_id == 0xCAFEF00D && fb2->newest_frame == 99 && fb2->frames_dropped == 1 && fb2->fragments_missing == 2
+			&& fb2->decode_100us == 23 && fb2->latency_100us == 250 && fb2->flags == kFeedbackKeyframeRequest && fb2->display_fps_x10 == 599
+			&& fb2->max_bitrate_kbps == 12000);
+		MediaControl mc;
+		mc.flags = kControlCamera | kControlMic;
+		auto mp = BuildMediaControl(4, mc);
+		CHECK(mp.size() == kMediaControlSize);
+		auto mc2 = ParseMediaControl(mp.data(), mp.size());
+		CHECK(mc2 && mc2->flags == (kControlCamera | kControlMic) && mc2->camera_width == 640 && mc2->camera_height == 480 && mc2->mic_sample_rate == 32000);
+		int16_t pcm[320];
+		for (int i = 0; i < 320; ++i)
+			pcm[i] = (int16_t)(i * 100 - 16000);
+		MicAudio ma;
+		ma.timestamp_us = 5; ma.first_sample = 3200; ma.sample_count = 320;
+		auto ap = BuildMicAudio(5, ma, pcm);
+		CHECK(ap.size() == kMicHeaderSize + 640);
+		auto ma2 = ParseMicAudio(ap.data(), ap.size());
+		CHECK(ma2 && ma2->sample_count == 320 && ma2->first_sample == 3200 && ma2->sample_rate == 32000);
+		CHECK(ma2 && (int16_t)(ma2->samples[2] | (ma2->samples[3] << 8)) == pcm[1]);
+	}
+
+	// --- bitrate controller
+	{
+		BitrateController b;
+		VideoFeedback clean;
+		clean.fragments_received = 500; clean.interval_ms = 100; clean.assembly_100us = 20;
+		uint64_t t = 0;
+		for (int i = 0; i < 30; ++i) // 3 s clean: goes up
+			b.OnFeedback(clean, t += 100000);
+		CHECK(b.kbps() > BitrateController::kStartKbps);
+		const uint32_t high = b.kbps();
+		VideoFeedback lossy = clean;
+		lossy.fragments_missing = 60; // > 5 %
+		b.OnFeedback(lossy, t += 100000);
+		CHECK(b.kbps() < high * 0.75);
+		const uint32_t cut = b.kbps();
+		b.OnFeedback(lossy, t += 100000); // within 300 ms of the cut: no second cut yet
+		CHECK(b.kbps() == cut);
+		for (int i = 0; i < 100; ++i)
+			b.OnFeedback(lossy, t += 100000);
+		CHECK(b.kbps() == BitrateController::kMinKbps);
+		b.SetMax(3000);
+		for (int i = 0; i < 300; ++i)
+			b.OnFeedback(clean, t += 100000);
+		CHECK(b.kbps() == 3000);
+	}
+
+	// --- microphone jitter buffer
+	{
+		MicJitterBuffer j(32000);
+		int16_t in[320], out[96];
+		for (int i = 0; i < 320; ++i)
+			in[i] = (int16_t)(i + 1);
+		j.Push(in, 320); // 10 ms: below the 40 ms target, still silent
+		CHECK(j.Pop(out, 96) == 0 && out[0] == 0);
+		for (int k = 0; k < 4; ++k)
+			j.Push(in, 320);
+		CHECK(j.Pop(out, 96) == 96 && out[0] == 1 && out[95] == 96);
+		// overfill: trimmed back to the target
+		for (int k = 0; k < 40; ++k)
+			j.Push(in, 320);
+		CHECK(j.buffered() <= 32000 * 150 / 1000);
+		CHECK(j.overflow_drops() > 0);
+		// drain: underrun counted, then silence until refilled
+		int16_t big[8000];
+		j.Pop(big, 8000);
+		CHECK(j.underruns() == 1 && j.buffered() == 0);
 	}
 
 	printf(fails ? "%d FAILED\n" : "all passed\n", fails);

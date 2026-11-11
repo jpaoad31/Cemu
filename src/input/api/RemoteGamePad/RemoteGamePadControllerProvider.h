@@ -58,6 +58,7 @@ public:
 		bool connected = false;
 		std::string phone_name, phone_model, app_version, address;
 		std::string transport; // "UDP port 26770"
+		uint16 capabilities = 0; // the phone's, from HELLO
 		float packet_rate = 0;
 		float max_gap_ms = 0; // longest interval between input packets, last ~3 s
 		uint64 packets = 0;
@@ -91,6 +92,7 @@ private:
 	void handle_packet(const uint8_t* data, size_t size, const RemoteGamePadTransport::Peer& sender);
 	void send_hello_ack(uint32 client_id, const RemoteGamePadTransport::Peer& to);
 	void send_input_ack();
+	bool MediaPortHere() const;
 
 	std::mutex m_start_mutex;
 	std::atomic_bool m_running = false;
@@ -119,4 +121,5 @@ private:
 	bool m_ack_pending = false;
 	RemoteGamePad::InputAck m_pending_ack{};
 	uint32 m_send_seq = 0;
+	bool m_media_client = false; // told the media hub about the phone
 };

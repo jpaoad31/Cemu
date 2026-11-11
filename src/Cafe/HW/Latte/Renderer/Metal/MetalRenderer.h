@@ -177,6 +177,7 @@ public:
 	void SwapBuffers(bool swapTV, bool swapDRC) override;
 
 	void HandleScreenshotRequest(LatteTextureView* texView, bool padView) override;
+	void CaptureRemoteGamePadFrame(LatteTextureView* texView) override;
 
 	void DrawBackbufferQuad(LatteTextureView* texView, RendererOutputShader* shader, bool useLinearTexFilter,
 									sint32 imageX, sint32 imageY, sint32 imageWidth, sint32 imageHeight,
@@ -489,6 +490,9 @@ private:
 	// Managers and caches
 	class MetalMemoryManager* m_memoryManager;
 	class MetalOutputShaderCache* m_outputShaderCache;
+
+	// Remote GamePad video: Metal textures over the encoder's IOSurfaces ([0] unorm, [1] sRGB)
+	std::unordered_map<IOSurfaceRef, MTL::Texture*> m_remoteGamePadTextures[2];
 	class MetalPipelineCache* m_pipelineCache;
 	class MetalDepthStencilCache* m_depthStencilCache;
 	class MetalSamplerCache* m_samplerCache;

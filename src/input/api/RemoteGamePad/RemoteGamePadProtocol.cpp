@@ -252,4 +252,161 @@ namespace RemoteGamePad
 		finish(b);
 		return b;
 	}
+
+	// ---- media
+
+	std::vector<uint8_t> BuildFragment(MsgType type, uint32_t seq, const MediaFragment& f)
+	{
+		auto b = begin(type, seq);
+		b.reserve(kFragmentHeaderSize + f.data_size);
+		wr32(b, f.frame_id);
+		wr16(b, f.index);
+		wr16(b, f.count);
+		wr8(b, f.codec);
+		wr8(b, f.flags);
+		wr16(b, f.first_slice);
+		wr64(b, f.timestamp_us);
+		wr32(b, f.frame_size);
+		wr32(b, f.offset);
+		wr16(b, f.width);
+		wr16(b, f.height);
+		wr16(b, f.pipeline_100us);
+		wr16(b, f.bitrate_10kbps);
+		if (f.data_size)
+			b.insert(b.end(), f.data, f.data + f.data_size);
+		finish(b);
+		return b;
+	}
+
+	std::optional<MediaFragment> ParseFragment(const uint8_t* data, size_t size)
+	{
+		const auto h = ParseHeader(data, size);
+		if (!h || (h->type != MsgType::VideoFragment && h->type != MsgType::CameraFragment) || h->length < kFragmentHeaderSize)
+			return std::nullopt;
+		const uint8_t* p = data + kHeaderSize;
+		MediaFragment f;
+		f.frame_id = rd32(p);
+		f.index = rd16(p + 4);
+		f.count = rd16(p + 6);
+		f.codec = p[8];
+		f.flags = p[9];
+		f.first_slice = rd16(p + 10);
+		f.timestamp_us = rd64(p + 12);
+		f.frame_size = rd32(p + 20);
+		f.offset = rd32(p + 24);
+		f.width = rd16(p + 28);
+		f.height = rd16(p + 30);
+		f.pipeline_100us = rd16(p + 32);
+		f.bitrate_10kbps = rd16(p + 34);
+		f.data = data + kFragmentHeaderSize;
+		f.data_size = h->length - kFragmentHeaderSize;
+		if (f.count == 0 || f.index >= f.count || f.frame_size > kMaxFrameSize || (uint64_t)f.offset + f.data_size > f.frame_size)
+			return std::nullopt;
+		return f;
+	}
+
+	std::vector<uint8_t> BuildVideoFeedback(uint32_t seq, const VideoFeedback& f)
+	{
+		auto b = begin(MsgType::VideoFeedback, seq);
+		wr32(b, f.client_id);
+		wr32(b, f.newest_frame);
+		wr16(b, f.frames_shown);
+		wr16(b, f.frames_dropped);
+		wr16(b, f.fragments_received);
+		wr16(b, f.fragments_missing);
+		wr16(b, f.interval_ms);
+		wr16(b, f.decode_100us);
+		wr16(b, f.assembly_100us);
+		wr16(b, f.latency_100us);
+		wr8(b, f.flags);
+		wr8(b, 0);
+		wr16(b, f.display_fps_x10);
+		wr32(b, f.max_bitrate_kbps);
+		finish(b);
+		return b;
+	}
+
+	std::optional<VideoFeedback> ParseVideoFeedback(const uint8_t* data, size_t size)
+	{
+		const auto h = ParseHeader(data, size);
+		if (!h || h->type != MsgType::VideoFeedback || h->length < kVideoFeedbackSize)
+			return std::nullopt;
+		const uint8_t* p = data + kHeaderSize;
+		VideoFeedback f;
+		f.client_id = rd32(p);
+		f.newest_frame = rd32(p + 4);
+		f.frames_shown = rd16(p + 8);
+		f.frames_dropped = rd16(p + 10);
+		f.fragments_received = rd16(p + 12);
+		f.fragments_missing = rd16(p + 14);
+		f.interval_ms = rd16(p + 16);
+		f.decode_100us = rd16(p + 18);
+		f.assembly_100us = rd16(p + 20);
+		f.latency_100us = rd16(p + 22);
+		f.flags = p[24];
+		f.display_fps_x10 = rd16(p + 26);
+		f.max_bitrate_kbps = rd32(p + 28);
+		return f;
+	}
+
+	std::vector<uint8_t> BuildMediaControl(uint32_t seq, const MediaControl& c)
+	{
+		auto b = begin(MsgType::MediaControl, seq);
+		wr8(b, c.flags);
+		wr8(b, 0);
+		wr16(b, c.camera_width);
+		wr16(b, c.camera_height);
+		wr16(b, c.mic_sample_rate);
+		finish(b);
+		return b;
+	}
+
+	std::optional<MediaControl> ParseMediaControl(const uint8_t* data, size_t size)
+	{
+		const auto h = ParseHeader(data, size);
+		if (!h || h->type != MsgType::MediaControl || h->length < kMediaControlSize)
+			return std::nullopt;
+		const uint8_t* p = data + kHeaderSize;
+		MediaControl c;
+		c.flags = p[0];
+		c.camera_width = rd16(p + 2);
+		c.camera_height = rd16(p + 4);
+		c.mic_sample_rate = rd16(p + 6);
+		return c;
+	}
+
+	std::vector<uint8_t> BuildMicAudio(uint32_t seq, const MicAudio& m, const int16_t* samples)
+	{
+		auto b = begin(MsgType::MicAudio, seq);
+		const uint16_t n = (uint16_t)std::min<size_t>(m.sample_count, kMaxMicSamples);
+		wr64(b, m.timestamp_us);
+		wr32(b, m.first_sample);
+		wr16(b, m.sample_rate);
+		wr16(b, n);
+		wr8(b, m.format);
+		wr8(b, 0);
+		wr16(b, 0);
+		for (uint16_t i = 0; i < n; ++i)
+			wr16(b, (uint16_t)samples[i]);
+		finish(b);
+		return b;
+	}
+
+	std::optional<MicAudio> ParseMicAudio(const uint8_t* data, size_t size)
+	{
+		const auto h = ParseHeader(data, size);
+		if (!h || h->type != MsgType::MicAudio || h->length < kMicHeaderSize)
+			return std::nullopt;
+		const uint8_t* p = data + kHeaderSize;
+		MicAudio m;
+		m.timestamp_us = rd64(p);
+		m.first_sample = rd32(p + 8);
+		m.sample_rate = rd16(p + 12);
+		m.sample_count = rd16(p + 14);
+		m.format = p[16];
+		m.samples = data + kMicHeaderSize;
+		if (m.format != 1 || kMicHeaderSize + (size_t)m.sample_count * 2 > h->length)
+			return std::nullopt;
+		return m;
+	}
 }

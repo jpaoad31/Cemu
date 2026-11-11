@@ -1,4 +1,5 @@
 #include "input/api/RemoteGamePad/RemoteGamePadController.h"
+#include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 
 #include <pugixml.hpp>
 #include <cstdlib>
@@ -41,6 +42,11 @@ void RemoteGamePadController::save(pugi::xml_node& node)
 {
 	base_type::save(node);
 	node.append_child("port").append_child(pugi::node_pcdata).set_value(fmt::format("{}", m_provider->get_settings().port).c_str());
+	// GamePad camera and mic source (global, stored with the Remote GamePad profile)
+	node.append_child("camera").append_child(pugi::node_pcdata).set_value(
+		RemoteGamePad::Media::GetCameraSource() == RemoteGamePad::Media::CameraSource::Mac ? "mac" : "auto");
+	node.append_child("mic").append_child(pugi::node_pcdata).set_value(
+		RemoteGamePad::Media::GetMicSource() == RemoteGamePad::Media::MicSource::Host ? "host" : "auto");
 }
 
 void RemoteGamePadController::load(const pugi::xml_node& node)
@@ -50,6 +56,10 @@ void RemoteGamePadController::load(const pugi::xml_node& node)
 	RemoteGamePadProviderSettings settings;
 	if (const auto value = node.child("port"))
 		settings.port = ConvertString<uint16>(value.child_value());
+	if (const auto value = node.child("camera"))
+		RemoteGamePad::Media::SetCameraSource(std::string_view(value.child_value()) == "mac" ? RemoteGamePad::Media::CameraSource::Mac : RemoteGamePad::Media::CameraSource::Auto);
+	if (const auto value = node.child("mic"))
+		RemoteGamePad::Media::SetMicSource(std::string_view(value.child_value()) == "host" ? RemoteGamePad::Media::MicSource::Host : RemoteGamePad::Media::MicSource::Auto);
 
 	const auto provider = InputManager::instance().get_api_provider(api(), settings);
 	update_provider(std::dynamic_pointer_cast<RemoteGamePadControllerProvider>(provider));

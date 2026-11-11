@@ -73,6 +73,8 @@ public:
 	void CancelScreenshotRequest();
 
 	virtual void HandleScreenshotRequest(LatteTextureView* texView, bool padView){}
+	// Remote GamePad: copy the GamePad (DRC) image to the video encoder (Metal only)
+	virtual void CaptureRemoteGamePadFrame(LatteTextureView* texView) {}
 
 	virtual void DrawBackbufferQuad(LatteTextureView* texView, RendererOutputShader* shader, bool useLinearTexFilter,
 												sint32 imageX, sint32 imageY, sint32 imageWidth, sint32 imageHeight,

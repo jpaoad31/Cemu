@@ -23,6 +23,9 @@ add_library(CemuInput
 	api/RemoteGamePad/RemoteGamePadController.cpp
 	api/RemoteGamePad/RemoteGamePadTransport.h
 	api/RemoteGamePad/RemoteGamePadTransportUDP.cpp
+	api/RemoteGamePad/RemoteGamePadMedia.h
+	api/RemoteGamePad/RemoteGamePadMediaCore.h
+	api/RemoteGamePad/RemoteGamePadMediaCore.cpp
 	api/Keyboard/KeyboardControllerProvider.h
 	api/Keyboard/KeyboardControllerProvider.cpp
 	api/Keyboard/KeyboardController.cpp
@@ -48,6 +51,25 @@ add_library(CemuInput
 set_property(TARGET CemuInput PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 cemu_use_precompiled_header(CemuInput)
+
+# Remote GamePad media (video encoder, phone camera and mic): VideoToolbox on macOS, stubs elsewhere
+if(APPLE)
+	target_sources(CemuInput PRIVATE api/RemoteGamePad/RemoteGamePadMediaApple.cpp)
+	target_link_libraries(CemuInput PRIVATE
+		"-framework VideoToolbox"
+		"-framework CoreMedia"
+		"-framework CoreVideo"
+		"-framework IOSurface"
+		"-framework CoreFoundation"
+	)
+else()
+	target_sources(CemuInput PRIVATE api/RemoteGamePad/RemoteGamePadMediaNull.cpp)
+endif()
+# UDP with reply-from-the-request's-address (IP_PKTINFO); its own feature macros, so no PCH
+if(NOT WIN32)
+	target_sources(CemuInput PRIVATE api/RemoteGamePad/RemoteGamePadUdp.h api/RemoteGamePad/RemoteGamePadUdp.cpp)
+	set_source_files_properties(api/RemoteGamePad/RemoteGamePadUdp.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+endif()
 
 if (ENABLE_LIBUSB)
 	target_sources(CemuInput PRIVATE
