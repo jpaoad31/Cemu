@@ -88,6 +88,7 @@ void LatteAsyncCommands_queueForceTextureReadback(MPTR physAddr, MPTR mipAddr, u
  * RAM, so read back any GPU-written tiled color texture that starts there. Wii Fit U renders Mii icons
  * into a tiled RGBA8 target and then thresholds their alpha on the CPU (RPSysMiiIcon::BinarizationAlpha):
  * without this the CPU edited stale RAM and the next reload replaced the icon with that garbage.
+ * Linear textures written by a GPU copy are read back here too (see _LatteAsyncCommands_cpuReadback).
  */
 void LatteAsyncCommands_queueCpuReadback(MPTR physAddr)
 {
@@ -113,18 +114,34 @@ static void _LatteAsyncCommands_cpuReadback(MPTR physAddr)
 		if (textures.empty())
 			cemuLog_log(LogType::TextureReadback, "[TextureReadback-CPU] no cached texture at {:08x}", physAddr);
 	}
+	std::vector<LatteTexture*> readbackTextures;
 	for (LatteTexture* tex : textures)
 	{
-		if (!tex->isUpdatedOnGPU || tex->isDepth || tex->enableReadback) // linear ones are mirrored already
+		if (!tex->isUpdatedOnGPU || tex->isDepth)
 			continue;
 		if (tex->overwriteInfo.hasResolutionOverwrite || tex->dim != Latte::E_DIM::DIM_2D || !tex->baseView)
 			continue;
-		if (Latte::GetHWFormat(tex->format) != Latte::E_HWFMT::HWFMT_8_8_8_8) // what the RAM write-back handles for tiled textures
+		// Textures Cemu mirrors to RAM (enableReadback: linear ones) are mirrored after draws into them, but not
+		// after a GPU copy into them: GX2CopySurface linear -> linear (LatteSurfaceCopy only reads back tiled ->
+		// linear). Wii Fit U's photos take that path (RPStepSaveDataMgr::convertTextureToJpeg copies the linear
+		// 448x256 album photo into a linear temp, GX2DrawDone, GX2Invalidate CPU|color, then JPEG-encodes RAM).
+		// Other tiled textures: only what the RAM write-back handles for them.
+		if (!tex->enableReadback && Latte::GetHWFormat(tex->format) != Latte::E_HWFMT::HWFMT_8_8_8_8)
 			continue;
 		LatteTextureSliceMipInfo* sliceMipInfo = tex->sliceMipInfo + tex->GetSliceMipArrayIndex(0, 0);
 		// only if the GPU wrote it since the last such readback: the same call after the CPU edits the data must not undo them
 		if (sliceMipInfo->lastDynamicUpdate <= tex->lastCpuReadbackDynamicUpdate)
 			continue;
+		readbackTextures.push_back(tex);
+	}
+	// several cached textures can alias this address (e.g. an older tiled one and the linear copy target):
+	// write the most recently GPU-written one last, so RAM ends up with what the GPU wrote there last
+	std::stable_sort(readbackTextures.begin(), readbackTextures.end(), [](LatteTexture* a, LatteTexture* b) {
+		return a->sliceMipInfo[a->GetSliceMipArrayIndex(0, 0)].lastDynamicUpdate < b->sliceMipInfo[b->GetSliceMipArrayIndex(0, 0)].lastDynamicUpdate;
+	});
+	for (LatteTexture* tex : readbackTextures)
+	{
+		LatteTextureSliceMipInfo* sliceMipInfo = tex->sliceMipInfo + tex->GetSliceMipArrayIndex(0, 0);
 		tex->lastCpuReadbackDynamicUpdate = sliceMipInfo->lastDynamicUpdate;
 		cemuLog_log(LogType::TextureReadback, "[TextureReadback-CPU] PhysAddr {:08x} Res {}x{} Fmt {:04x} TM {}", tex->physAddress, tex->width, tex->height, (uint32)tex->format, (uint32)tex->tileMode);
 		LatteTexture_UpdateDataToLatest(tex);
