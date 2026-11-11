@@ -65,6 +65,93 @@ struct OverlayList
 		: text(std::move(text)), width(width) {}
 };
 
+// fork: resolution readout (Options > General settings > Overlay > Resolution)
+namespace
+{
+	struct ScreenResolutionInfo
+	{
+		uint32 width{}, height{}, format{}; // colour buffer given to GX2CopyColorBufferToScanBuffer
+		sint32 effectiveWidth{}, effectiveHeight{}; // host texture size (differs when a graphic pack scales it)
+		std::chrono::steady_clock::time_point lastSource{};
+		sint32 presentedWidth[2]{}, presentedHeight[2]{}; // [0] main window, [1] GamePad window
+		std::chrono::steady_clock::time_point lastPresented[2]{};
+	};
+	ScreenResolutionInfo s_screenRes[2]; // [0] TV, [1] GamePad
+
+	const char* ResolutionFormatName(uint32 format)
+	{
+		switch (format)
+		{
+		case 0x01a: return "RGBA8";
+		case 0x41a: return "RGBA8 sRGB";
+		case 0x019: return "RGB10A2";
+		case 0x419: return "RGB10A2 sRGB";
+		case 0x008: return "R5G6B5";
+		case 0x816: return "R11G11B10F";
+		case 0x820: return "RGBA16F";
+		case 0x01f: return "RGBA16";
+		default: return nullptr;
+		}
+	}
+
+	bool ResolutionIsRecent(std::chrono::steady_clock::time_point t, std::chrono::steady_clock::time_point now)
+	{
+		return t.time_since_epoch().count() != 0 && (now - t) < std::chrono::milliseconds(750);
+	}
+
+	std::string ResolutionLine(int screen, std::chrono::steady_clock::time_point now)
+	{
+		const ScreenResolutionInfo& info = s_screenRes[screen];
+		std::string line = screen == 0 ? "TV " : "GamePad ";
+		if (!ResolutionIsRecent(info.lastSource, now))
+			return line + "-";
+		line += fmt::format("{}x{}", info.width, info.height);
+		if (info.effectiveWidth != (sint32)info.width || info.effectiveHeight != (sint32)info.height)
+			line += fmt::format(" (pack {}x{})", info.effectiveWidth, info.effectiveHeight);
+		if (const char* name = ResolutionFormatName(info.format))
+			line += fmt::format(" {}", name);
+		else
+			line += fmt::format(" fmt {:#05x}", info.format);
+		bool shown = false;
+		for (int w = 0; w < 2; w++)
+		{
+			if (!ResolutionIsRecent(info.lastPresented[w], now))
+				continue;
+			line += fmt::format("{} {}x{}", shown ? " +" : " ->", info.presentedWidth[w], info.presentedHeight[w]);
+			if (w == 1)
+				line += " (pad window)";
+			shown = true;
+		}
+		if (!shown)
+			line += " -> not shown";
+		return line;
+	}
+}
+
+void LatteOverlay_noteScanSource(int screen, uint32 width, uint32 height, uint32 format, sint32 effectiveWidth, sint32 effectiveHeight)
+{
+	if (screen < 0 || screen > 1)
+		return;
+	ScreenResolutionInfo& info = s_screenRes[screen];
+	info.width = width;
+	info.height = height;
+	info.format = format;
+	info.effectiveWidth = effectiveWidth;
+	info.effectiveHeight = effectiveHeight;
+	info.lastSource = std::chrono::steady_clock::now();
+}
+
+void LatteOverlay_notePresented(int screen, bool padWindow, sint32 width, sint32 height)
+{
+	if (screen < 0 || screen > 1)
+		return;
+	ScreenResolutionInfo& info = s_screenRes[screen];
+	const int w = padWindow ? 1 : 0;
+	info.presentedWidth[w] = width;
+	info.presentedHeight[w] = height;
+	info.lastPresented[w] = std::chrono::steady_clock::now();
+}
+
 const auto kPopupFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
 
 const float kBackgroundAlpha = 0.65f;
@@ -78,7 +165,7 @@ void LatteOverlay_renderOverlay(ImVec2& position, ImVec2& pivot, sint32 directio
 	const ImVec4 color = ImGui::ColorConvertU32ToFloat4(config.overlay.text_color);
 	ImGui::PushStyleColor(ImGuiCol_Text, color);
 	// stats overlay
-	if (config.overlay.fps || config.overlay.drawcalls || config.overlay.cpu_usage || config.overlay.cpu_per_core_usage || config.overlay.ram_usage)
+	if (config.overlay.fps || config.overlay.drawcalls || config.overlay.cpu_usage || config.overlay.cpu_per_core_usage || config.overlay.ram_usage || config.overlay.resolution)
 	{
 		ImGui::SetNextWindowPos(position, ImGuiCond_Always, pivot);
 		ImGui::SetNextWindowBgAlpha(kBackgroundAlpha);
@@ -106,6 +193,15 @@ void LatteOverlay_renderOverlay(ImVec2& position, ImVec2& pivot, sint32 directio
 
 			if(config.overlay.vram_usage && g_state.vramUsage != -1 && g_state.vramTotal != -1)
 				ImGui::Text("VRAM: %dMB / %dMB", g_state.vramUsage, g_state.vramTotal);
+
+			if (config.overlay.resolution)
+			{
+				const auto now = std::chrono::steady_clock::now();
+				// the window's own screen first
+				const int first = pad ? 1 : 0;
+				ImGui::TextUnformatted(ResolutionLine(first, now).c_str());
+				ImGui::TextUnformatted(ResolutionLine(1 - first, now).c_str());
+			}
 
 			if (config.overlay.debug)
 			{

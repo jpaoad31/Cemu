@@ -160,6 +160,7 @@ XMLConfigParser CemuConfig::Load(XMLConfigParser& parser)
 		overlay.cpu_per_core_usage = overlay_node.get("CPUPerCoreUsage", false);
 		overlay.ram_usage = overlay_node.get("RAMUsage", false);
 		overlay.vram_usage = overlay_node.get("VRAMUsage", false);
+		overlay.resolution = overlay_node.get("Resolution", false);
 		overlay.debug = overlay_node.get("Debug", false);
 
 		notification.controller_profiles = overlay_node.get("ControllerProfiles", true);
@@ -389,6 +390,7 @@ XMLConfigParser CemuConfig::Save(XMLConfigParser& parser)
 	overlay_node.set("CPUPerCoreUsage", overlay.cpu_per_core_usage);
 	overlay_node.set("RAMUsage", overlay.ram_usage);
 	overlay_node.set("VRAMUsage", overlay.vram_usage);
+	overlay_node.set("Resolution", overlay.resolution);
 	overlay_node.set("Debug", overlay.debug);
 
 	auto notification_node = graphic.set("Notification");

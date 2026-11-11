@@ -871,6 +871,9 @@ void LatteRenderTarget_getScreenImageArea(sint32* x, sint32* y, sint32* width, s
 		*fullHeight = h;
 }
 
+// fork: which screen (0 TV, 1 GamePad) the next copyToBackbuffer draws, for the resolution overlay; -1 = OSScreen etc.
+static int s_backbufferScreen = -1;
+
 void LatteRenderTarget_copyToBackbuffer(LatteTextureView* textureView, bool isPadView)
 {
 	// make sure texture is updated to latest data in cache
@@ -888,6 +891,8 @@ void LatteRenderTarget_copyToBackbuffer(LatteTextureView* textureView, bool isPa
 	sint32 fullscreenWidth, fullscreenHeight;
 
 	LatteRenderTarget_getScreenImageArea(&imageX, &imageY, &imageWidth, &imageHeight, &fullscreenWidth, &fullscreenHeight, isPadView);
+
+	LatteOverlay_notePresented(s_backbufferScreen, isPadView, imageWidth, imageHeight);
 
 	bool clearBackground = false;
 	if (imageWidth != fullscreenWidth || imageHeight != fullscreenHeight)
@@ -1015,7 +1020,12 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
 
 	bool showDRC = swkbd_hasKeyboardInputHook() == false && (isDRCPrimary ^ altScreenRequested);
 
+	sint32 effectiveWidth, effectiveHeight; // the host texture's size (graphic packs can scale it)
+	texView->baseTexture->GetEffectiveSize(effectiveWidth, effectiveHeight, 0);
+
 	// Remote GamePad video: every GamePad frame, whichever window (if any) shows it
+	if (renderTarget & RENDER_TARGET_DRC)
+		RemoteGamePad::Media::SetVideoSourceSize(effectiveWidth, effectiveHeight);
 	if ((renderTarget & RENDER_TARGET_DRC) && RemoteGamePad::Media::VideoWanted())
 	{
 		LatteTexture_UpdateDataToLatest(texView->baseTexture);
@@ -1023,10 +1033,19 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
 		g_renderer->CaptureRemoteGamePadFrame(texView);
 	}
 
+	// fork: resolution overlay (source colour buffer, and the host texture's size if a pack scales it)
+	if (renderTarget & RENDER_TARGET_TV)
+		LatteOverlay_noteScanSource(0, colorBufferWidth, colorBufferHeight, colorBufferFormat, effectiveWidth, effectiveHeight);
+	if (renderTarget & RENDER_TARGET_DRC)
+		LatteOverlay_noteScanSource(1, colorBufferWidth, colorBufferHeight, colorBufferFormat, effectiveWidth, effectiveHeight);
+
+	s_backbufferScreen = 1;
 	if ((renderTarget & RENDER_TARGET_DRC) && g_renderer->IsPadWindowActive())
 		LatteRenderTarget_copyToBackbuffer(texView, true);
+	s_backbufferScreen = showDRC ? 1 : 0;
 	if (((renderTarget & RENDER_TARGET_TV) && !showDRC) || ((renderTarget & RENDER_TARGET_DRC) && showDRC))
 		LatteRenderTarget_copyToBackbuffer(texView, false);
+	s_backbufferScreen = -1;
 }
 
 

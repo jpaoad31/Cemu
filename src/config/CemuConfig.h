@@ -468,6 +468,7 @@ struct CemuConfig
 		bool cpu_per_core_usage = false;
 		bool ram_usage = false;
 		bool vram_usage = false;
+		bool resolution = false; // fork: TV/GamePad source size -> presented size
 		bool debug = false;
 	} overlay{};
 

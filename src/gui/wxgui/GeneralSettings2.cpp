@@ -794,6 +794,10 @@ wxPanel* GeneralSettings2::AddOverlayPage(wxNotebook* notebook)
 
 			settings2_row->Add(m_overlay_vram, 0, wxALL, 5);
 
+			m_overlay_resolution = new wxCheckBox(box, wxID_ANY, _("Resolution"));
+			m_overlay_resolution->SetToolTip(_("Per screen: the size of the colour buffer the game copies to the TV/GamePad scan buffer (and the graphic pack's size if a pack scales it) -> the size it is drawn at in the window, in pixels"));
+			settings2_row->Add(m_overlay_resolution, 0, wxALL, 5);
+
 			m_overlay_debug = new wxCheckBox(box, wxID_ANY, _("Debug"));
 			m_overlay_debug->SetToolTip(_("Displays internal debug information (Vulkan only)"));
 			settings2_row->Add(m_overlay_debug, 0, wxALL, 5);
@@ -1285,6 +1289,7 @@ void GeneralSettings2::StoreConfig()
 	config.overlay.cpu_per_core_usage = m_overlay_cpu_per_core->GetValue();
 	config.overlay.ram_usage = m_overlay_ram->GetValue();
 	config.overlay.vram_usage = m_overlay_vram->GetValue();
+	config.overlay.resolution = m_overlay_resolution->GetValue();
 	config.overlay.debug = m_overlay_debug->GetValue();
 
 	config.notification.position = (ScreenPosition)m_notification_position->GetSelection(); wxASSERT((int)config.notification.position <= (int)ScreenPosition::kBottomRight);
@@ -1969,6 +1974,7 @@ void GeneralSettings2::ApplyConfig()
 	m_overlay_cpu_per_core->SetValue(config.overlay.cpu_per_core_usage);
 	m_overlay_ram->SetValue(config.overlay.ram_usage);
 	m_overlay_vram->SetValue(config.overlay.vram_usage);
+	m_overlay_resolution->SetValue(config.overlay.resolution);
 	m_overlay_debug->SetValue(config.overlay.debug);
 
 	wxASSERT((uint32)config.notification.position < m_notification_position->GetCount());
