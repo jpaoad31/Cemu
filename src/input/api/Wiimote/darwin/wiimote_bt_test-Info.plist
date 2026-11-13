@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>info.cemu.wiimote-bt-test</string>
+	<key>CFBundleName</key>
+	<string>wiimote_bt_test</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Connects to a real Wii Remote or Wii Balance Board to test Cemu's IOBluetooth backend.</string>
+</dict>
+</plist>

@@ -13,6 +13,9 @@
 #ifdef HAS_BLUEZ
 #include "input/api/Wiimote/l2cap/L2CapWiimote.h"
 #endif
+#ifdef HAS_IOBLUETOOTH
+#include "input/api/Wiimote/darwin/IOBluetoothWiimote.h"
+#endif
 
 #include <numbers>
 #include <queue>
@@ -278,6 +281,11 @@ void WiimoteControllerProvider::connectionThread()
 	while (m_running.load(std::memory_order_relaxed))
 	{
 		std::vector<WiimoteDevicePtr> devices;
+#ifdef HAS_IOBLUETOOTH
+		// devices connected directly over IOBluetooth (no pairing); first, so hidapi can skip them
+		const auto& btDevices = IOBluetoothWiimote::get_devices();
+		std::ranges::move(btDevices, std::back_inserter(devices));
+#endif
 #ifdef HAS_HIDAPI
 		const auto& hidDevices = HidapiWiimote::get_devices();
 		std::ranges::move(hidDevices, std::back_inserter(devices));

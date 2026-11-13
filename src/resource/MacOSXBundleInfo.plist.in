@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Cemu uses the camera as the Wii U GamePad's camera.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Cemu connects to real Wii Remotes and the Wii Balance Board over Bluetooth.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>${MACOSX_BUNDLE_COPYRIGHT}</string>
     	<key>LSApplicationCategoryType</key>

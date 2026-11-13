@@ -119,6 +119,26 @@ if (SUPPORTS_WIIMOTE)
 				api/Wiimote/l2cap/L2CapWiimote.cpp
 				api/Wiimote/l2cap/L2CapWiimote.h)
 	endif()
+
+	if (APPLE AND ENABLE_IOBLUETOOTH)
+		target_sources(CemuInput PRIVATE
+				api/Wiimote/darwin/IOBluetoothWiimote.mm
+				api/Wiimote/darwin/IOBluetoothWiimote.h)
+		target_link_libraries(CemuInput PRIVATE "-framework IOBluetooth" "-framework CoreBluetooth" "-framework Foundation")
+
+		# standalone test: scan / connect / print the first reports, outside Cemu
+		add_executable(wiimote_bt_test
+				api/Wiimote/darwin/wiimote_bt_test.mm
+				api/Wiimote/darwin/IOBluetoothWiimote.mm)
+		target_compile_definitions(wiimote_bt_test PRIVATE IOBT_STANDALONE)
+		target_include_directories(wiimote_bt_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+		target_compile_features(wiimote_bt_test PRIVATE cxx_std_20)
+		# an embedded Info.plist with the Bluetooth usage description, for the permission prompt
+		target_link_options(wiimote_bt_test PRIVATE
+				"LINKER:-sectcreate,__TEXT,__info_plist,${CMAKE_CURRENT_SOURCE_DIR}/api/Wiimote/darwin/wiimote_bt_test-Info.plist")
+		target_link_libraries(wiimote_bt_test PRIVATE "-framework IOBluetooth" "-framework CoreBluetooth" "-framework Foundation")
+		set_target_properties(wiimote_bt_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+	endif()
 endif ()
 
 

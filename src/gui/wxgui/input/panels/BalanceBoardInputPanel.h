@@ -43,6 +43,16 @@ private:
 
 	wxStaticText* m_status;
 
+#ifdef HAS_IOBLUETOOTH
+	// macOS: connect a real board over IOBluetooth (no pairing)
+	void on_bt_connect(wxCommandEvent& event);
+	void on_bt_cancel(wxCommandEvent& event);
+	void on_bt_timer(wxTimerEvent& event);
+	wxButton* m_bt_connect = nullptr;
+	wxButton* m_bt_cancel = nullptr;
+	wxStaticText* m_bt_status = nullptr;
+	wxTimer* m_bt_timer = nullptr;
+#endif
 
 
 	std::weak_ptr<BalanceBoardController> m_board;

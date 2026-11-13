@@ -1,6 +1,9 @@
 #include "HidapiWiimote.h"
 #include <SDL3/SDL.h>
 #include <cwchar>
+#ifdef HAS_IOBLUETOOTH
+#include "input/api/Wiimote/darwin/IOBluetoothWiimote.h"
+#endif
 
 static constexpr uint16 WIIMOTE_VENDOR_ID = 0x057e;
 static constexpr uint16 WIIMOTE_PRODUCT_ID = 0x0306;
@@ -35,6 +38,26 @@ std::vector<WiimoteDevicePtr> HidapiWiimote::get_devices() {
             continue;
         if (it->product_string && std::wcscmp(it->product_string, PRO_CONTROLLER_NAME) == 0)
             continue;
+#ifdef HAS_IOBLUETOOTH
+        // already connected directly through IOBluetooth: macOS reports the Bluetooth address as
+        // the HID serial number, so the same device isn't opened twice
+        if (it->serial_number && *it->serial_number)
+        {
+            std::string serial;
+            for (const wchar_t* c = it->serial_number; *c; ++c)
+                serial.push_back(*c < 0x80 ? (char)*c : '?');
+            if (IOBluetoothWiimote::is_handling_address(serial))
+            {
+                static std::string s_logged;
+                if (s_logged != serial)
+                {
+                    s_logged = serial;
+                    cemuLog_log(LogType::InputAPI, "Wiimote: hidapi device {} is already connected through IOBluetooth, skipping it", serial);
+                }
+                continue;
+            }
+        }
+#endif
         auto dev = SDL_hid_open_path(it->path);
         if (!dev){
             cemuLog_logDebug(LogType::Force, "Unable to open Wiimote device at {}: {}", it->path, SDL_GetError());

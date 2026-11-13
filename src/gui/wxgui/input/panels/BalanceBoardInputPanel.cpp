@@ -12,6 +12,9 @@
 #include "wxgui/helpers/wxHelpers.h"
 #include "wxgui/components/wxInputDraw.h"
 
+#ifdef HAS_IOBLUETOOTH
+#include "input/api/Wiimote/darwin/IOBluetoothWiimote.h"
+#endif
 
 BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 	: InputPanel(parent)
@@ -21,10 +24,30 @@ BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 
 	auto* main_sizer = new wxBoxSizer(wxVERTICAL);
 
-	auto* info = new wxStaticText(this, wxID_ANY, _("The Balance Board always uses Wii Remote channel 4 (WPAD channel 3). Use a Wiimote on another controller for the menus.\nReal board: pair it in the Bluetooth settings, then add it here with API \"Wiimote\". With a Wiimote controller added, the real board is the source and the options below are unused."));
+	auto* info = new wxStaticText(this, wxID_ANY, _("The Balance Board always uses Wii Remote channel 4 (WPAD channel 3). Use a Wiimote on another controller for the menus.\nReal board: connect it (below on macOS, or pair it in the Bluetooth settings), then add it here with API \"Wiimote\". With a Wiimote controller added, the real board is the source and the options below are unused."));
 	info->Wrap(600);
 	main_sizer->Add(info, 0, wxALL, 5);
 
+#ifdef HAS_IOBLUETOOTH
+	{
+		auto* bt_sizer = new wxBoxSizer(wxHORIZONTAL);
+		m_bt_connect = new wxButton(this, wxID_ANY, _("Connect real Wii device"));
+		m_bt_connect->SetToolTip(_("Click, then press the red sync button in the board's battery compartment (or 1+2 on a Wii Remote). Scans up to 60 s and connects the first Nintendo RVL device found, without macOS pairing."));
+		m_bt_connect->Bind(wxEVT_BUTTON, &BalanceBoardInputPanel::on_bt_connect, this);
+		bt_sizer->Add(m_bt_connect, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
+		m_bt_cancel = new wxButton(this, wxID_ANY, _("Cancel"));
+		m_bt_cancel->Bind(wxEVT_BUTTON, &BalanceBoardInputPanel::on_bt_cancel, this);
+		m_bt_cancel->Disable();
+		bt_sizer->Add(m_bt_cancel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 10);
+		m_bt_status = new wxStaticText(this, wxID_ANY, _("Click, then press the red sync button (up to 60 s)."));
+		bt_sizer->Add(m_bt_status, 1, wxALIGN_CENTER_VERTICAL);
+		main_sizer->Add(bt_sizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 5);
+
+		m_bt_timer = new wxTimer(this);
+		Bind(wxEVT_TIMER, &BalanceBoardInputPanel::on_bt_timer, this, m_bt_timer->GetId());
+		m_bt_timer->Start(250);
+	}
+#endif
 	main_sizer->Add(new wxStaticLine(this), 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, 5);
 
 	m_item_sizer = new wxGridBagSizer();
@@ -142,9 +165,54 @@ void BalanceBoardInputPanel::on_setting_changed(wxCommandEvent& event)
 
 BalanceBoardInputPanel::~BalanceBoardInputPanel()
 {
+#ifdef HAS_IOBLUETOOTH
+	if (m_bt_timer)
+		m_bt_timer->Stop();
+#endif
 }
 
 
+#ifdef HAS_IOBLUETOOTH
+void BalanceBoardInputPanel::on_bt_connect(wxCommandEvent& event)
+{
+	IOBluetoothWiimote::start_scan(60);
+}
+
+void BalanceBoardInputPanel::on_bt_cancel(wxCommandEvent& event)
+{
+	IOBluetoothWiimote::cancel_scan();
+}
+
+void BalanceBoardInputPanel::on_bt_timer(wxTimerEvent& event)
+{
+	const auto status = IOBluetoothWiimote::get_status();
+	wxString label;
+	if (status.scanning)
+		label = wxString::Format(_("Scanning... %d s left. %s"), status.seconds_left, wxString::FromUTF8(status.text));
+	else if (!status.text.empty())
+		label = wxString::FromUTF8(status.text);
+	else
+		label = _("Click, then press the red sync button (up to 60 s).");
+	if (!status.connected.empty())
+	{
+		wxString list;
+		for (const auto& c : status.connected)
+			list += (list.empty() ? "" : ", ") + wxString::FromUTF8(c);
+		label += wxString::Format(_("\nConnected over Bluetooth: %s. Add it above with API \"Wiimote\" (refresh the list)."), list);
+	}
+	if (m_bt_connect->IsEnabled() == status.scanning)
+		m_bt_connect->Enable(!status.scanning);
+	if (m_bt_cancel->IsEnabled() != status.scanning)
+		m_bt_cancel->Enable(status.scanning);
+	if (m_bt_status->GetLabel() != label)
+	{
+		const bool relayout = m_bt_status->GetLabel().Freq('\n') != label.Freq('\n');
+		m_bt_status->SetLabel(label);
+		if (relayout)
+			Layout();
+	}
+}
+#endif
 
 void BalanceBoardInputPanel::on_timer(const EmulatedControllerPtr& emulated_controller, const ControllerPtr& controller)
 {
