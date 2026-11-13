@@ -148,3 +148,9 @@ bool L2CapWiimote::operator==(const WiimoteDevice& rhs) const
 		return false;
 	return bacmp(&m_addr, &mote->m_addr) == 0;
 }
+
+std::string L2CapWiimote::get_identity() const
+{
+	const auto& b = m_addr.b;   // bdaddr_t is stored least significant byte first
+	return fmt::format("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", b[5], b[4], b[3], b[2], b[1], b[0]);
+}

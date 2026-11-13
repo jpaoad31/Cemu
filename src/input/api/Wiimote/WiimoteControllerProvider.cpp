@@ -61,13 +61,22 @@ std::vector<std::shared_ptr<ControllerBase>> WiimoteControllerProvider::get_cont
 
 	std::scoped_lock lock(m_device_mutex);
 
+	// an index is reserved for a device that used it before and is among the devices found now
+	auto reserved_for_other = [&](size_t index, const std::string& identity) {
+		if (index >= m_index_owner.size() || m_index_owner[index].empty() || m_index_owner[index] == identity)
+			return false;
+		return std::ranges::any_of(devices, [&](const WiimoteDevicePtr& d) { return d->get_identity() == m_index_owner[index]; });
+	};
+
 	for (auto& device : devices)
 	{
 		const auto writeable = device->write_data({kStatusRequest, 0x00});
         if (!writeable)
             continue;
 
+		const std::string identity = device->get_identity();
 		bool isDuplicate = false;
+		ssize_t ownIndex = -1;
 		ssize_t lowestReplaceableIndex = -1;
 		for (ssize_t i = m_wiimotes.size() - 1; i >= 0; --i)
 		{
@@ -82,14 +91,24 @@ std::vector<std::shared_ptr<ControllerBase>> WiimoteControllerProvider::get_cont
 				continue;
 			}
 
-			lowestReplaceableIndex = i;
+			if (!identity.empty() && (size_t)i < m_index_owner.size() && m_index_owner[i] == identity)
+				ownIndex = i;
+			else if (!reserved_for_other((size_t)i, identity))
+				lowestReplaceableIndex = i;
 		}
 		if (isDuplicate)
 			continue;
+		if (ownIndex != -1)
+			lowestReplaceableIndex = ownIndex;
+
+		const size_t new_index = lowestReplaceableIndex != -1 ? (size_t)lowestReplaceableIndex : m_wiimotes.size();
 		if (lowestReplaceableIndex != -1)
 			m_wiimotes.replace(lowestReplaceableIndex, std::make_unique<Wiimote>(device));
 		else
 			m_wiimotes.push_back(std::make_unique<Wiimote>(device));
+		if (m_index_owner.size() <= new_index)
+			m_index_owner.resize(new_index + 1);
+		m_index_owner[new_index] = identity;
 	}
 
 	std::vector<std::shared_ptr<ControllerBase>> result;

@@ -8,8 +8,8 @@ static constexpr uint16 WIIMOTE_MP_PRODUCT_ID = 0x0330;
 static constexpr uint16 WIIMOTE_MAX_INPUT_REPORT_LENGTH = 22;
 static constexpr auto PRO_CONTROLLER_NAME = L"Nintendo RVL-CNT-01-UC";
 
-HidapiWiimote::HidapiWiimote(SDL_hid_device* dev, std::string_view path)
- : m_handle(dev), m_path(path) {
+HidapiWiimote::HidapiWiimote(SDL_hid_device* dev, std::string_view path, std::string_view identity)
+ : m_handle(dev), m_path(path), m_identity(identity) {
 
 }
 
@@ -41,7 +41,17 @@ std::vector<WiimoteDevicePtr> HidapiWiimote::get_devices() {
         }
         else {
             SDL_hid_set_nonblocking(dev, true);
-            wiimote_devices.push_back(std::make_shared<HidapiWiimote>(dev, it->path));
+            // the path can change when a device reconnects; the serial number (the Bluetooth
+            // address for Bluetooth HID devices on macOS and Windows) doesn't
+            std::string identity;
+            if (it->serial_number)
+            {
+                for (const wchar_t* c = it->serial_number; *c; ++c)
+                    identity.push_back(*c < 0x80 ? (char)*c : '?');
+            }
+            if (identity.empty())
+                identity = it->path;
+            wiimote_devices.push_back(std::make_shared<HidapiWiimote>(dev, it->path, identity));
         }
     }
     SDL_hid_free_enumeration(device_enumeration);

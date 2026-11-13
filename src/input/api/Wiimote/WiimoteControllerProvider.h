@@ -99,6 +99,10 @@ private:
 		std::chrono::high_resolution_clock::time_point data_ts{};
 	};
 	boost::ptr_vector<Wiimote> m_wiimotes;
+	// the device that last used each index (WiimoteDevice::get_identity()): a device that comes back
+	// gets its old index again, so controller profiles (which refer to Wiimotes by index) still point
+	// at the same device even when several come back in a different order
+	std::vector<std::string> m_index_owner;
 
 	std::list<std::pair<size_t,std::vector<uint8>>> m_write_queue;
 	std::mutex m_writer_mutex;
