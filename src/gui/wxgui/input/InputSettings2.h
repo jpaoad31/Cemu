@@ -18,6 +18,7 @@ public:
 	~InputSettings2();
 
 private:
+	void grow_to_fit();
 	const wxString kDefaultProfileName = _("<profile name>");
 
 	wxNotebook* m_notebook;

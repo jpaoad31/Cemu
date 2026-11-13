@@ -33,6 +33,7 @@
 #include "wxgui/input/panels/ClassicControllerInputPanel.h"
 #include "wxgui/input/panels/WiimoteInputPanel.h"
 #include "wxgui/input/panels/BalanceBoardInputPanel.h"
+#include <wx/display.h>
 #include "wxgui/input/settings/WiimoteControllerSettings.h"
 #include "util/EventService.h"
 #include "input/api/RemoteGamePad/RemoteGamePadController.h"
@@ -76,7 +77,7 @@ using wxControllerPageData = wxCustomData<ControllerPage>;
 
 
 InputSettings2::InputSettings2(wxWindow* parent)
-	: wxDialog(parent, wxID_ANY, _("Input settings"))
+	: wxDialog(parent, wxID_ANY, _("Input settings"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 {
 	this->SetSizeHints(wxDefaultSize, wxDefaultSize);
 
@@ -548,6 +549,27 @@ void InputSettings2::update_state()
 		panel->Show();
 		page->wxWindowBase::Layout();
 		page->wxWindow::Update();
+		grow_to_fit();
+	}
+}
+
+// Panels differ a lot in size (the Balance Board panel is much taller than the GamePad's): grow the
+// window when the shown panel needs more room, never past the screen and never shrinking it.
+void InputSettings2::grow_to_fit()
+{
+	if (!GetSizer())
+		return;
+	GetSizer()->Layout();
+	const wxSize best = GetSizer()->ComputeFittingWindowSize(this);
+	wxSize size = GetSize();
+	size.IncTo(best);
+	const int display = wxDisplay::GetFromWindow(this);
+	const wxRect area = wxDisplay(display == wxNOT_FOUND ? 0 : display).GetClientArea();
+	size.DecTo(area.GetSize());
+	if (size != GetSize())
+	{
+		SetSize(size);
+		Layout();
 	}
 }
 
