@@ -9,6 +9,10 @@ One commit per fix, so upstream candidates can be offered separately.
 Committed (on `wii-fit-u`, newest last): the memory range and the Balance Board (08026ec), H264 (0ff9865),
 the graphic-pack code overlay (ecbd4a0), `--dump-nus` (88006ec), the WUA conversion error (3cca1e1),
 the macOS camera (40e4ce9), Stop emulation and the shutdown fixes (1428abd).
+General upstream bugs found during the Wii BT Bridge work, one commit each (reference fixes
+for issues, not PRs): the Wiimote GUI code compiled out since the wxWidgets split (73a7ed8), the Input settings window
+not resizable / not growing with its panel (a1e935b), XMLConfigParser ignoring 8/16-bit integers so the DSU port never
+loads (9aee914), Wii Remotes swapping indices when they reconnect in a different order (b1ef6f4).
 
 - **`SYSTEM_LIBS` memory range** (0x01000000-0x017FFFFF, readable). Wii Fit U reads past its
   two-entry pointing-device table (`jet::ui::UICore::Read`) into 0x011004xx. That range is mapped
@@ -113,6 +117,30 @@ the macOS camera (40e4ce9), Stop emulation and the shutdown fixes (1428abd).
   first so an aliasing older texture can't overwrite the newest data.
 - **Always expand all graphic packs** (committed; `GraphicPacksWindow2.*`, `GeneralSettings2.*`, `wxCemuConfig.*`): General settings checkbox, off by default; every folder in the graphic packs tree is expanded whenever the list is built (open, filter, reload).
 - **ErrEula dialog can be confirmed** (committed; `erreula.cpp`, `WindowSystem.h`, `wxWindowSystem.cpp`): Wii Fit U's ErrorViewer only checks the buttons when `ErrEulaGetSelectButtonNumError` > 0, which Cemu didn't export (unsupported stub returned 0), so clicks were ignored; added it (plus no-op SetControllerRemo/IsSelectCursorActive/DrawTV/DrawDRC), fixed the inverted IsDecideSelectLeft/RightButtonError, GamePad/Wii Remote A (left/only) and B (right) via the ControllerInfo given to ErrEulaCalc, Enter/Space; labels skip MSBT tags, map PUA E000-E005 to (A)/(B)/(X)/(Y)/(L)/(R), fall back to OK; each AppearError logs the raw button text.
+- **Real Balance Board** (committed, 8e3d2e3; tested in Wii Fit U with a real board through the bridge): see
+  "Real board" in `BALANCE_BOARD.md`. The Wiimote provider (hidapi) recognises the board (HID name
+  `Nintendo RVL-WBC`, extension ID 00 00 a4 20 04 02, the old constant 0x2A2C was wrong), initialises
+  it like Dolphin (0x55/0x00 to 0xF0/0xFB), reads and CRC-checks its calibration (0x20..0x3F, 0x60),
+  sets report 0x34 and parses load cells, temperature, battery and the A (power) button. Assigning a
+  "Wiimote" controller to the Balance Board controller makes it the source: the game gets the raw
+  values and the real calibration (WBC calibration waits for it; WPADControlBLC forwarded to 0xF1).
+  The panel shows the source, live kg per sensor and battery. The emulated board is unchanged
+  when no Wiimote controller is assigned.
+- **Real Wii devices over IOBluetooth on macOS** (committed, 6822452; **doesn't work on current macOS**, kept for
+  when Apple fixes it): macOS 27.2 can't pair the board (0x1f), so `src/input/api/Wiimote/darwin/IOBluetoothWiimote.{h,mm}`
+  connects it directly (baseband, L2CAP PSM 0x11 + 0x13, no pairing), adapted from Dolphin's removed `IOdarwin.mm`
+  (e9a11cdbfd). Scans only on the Balance Board panel's **Connect real Wii device** button: up to 60 s, ends at the
+  first Nintendo RVL device connected, Cancel button, status line. hidapi skips devices IOBluetooth holds.
+  `NSBluetoothAlwaysUsageDescription` added. Test tool `build/tools/wiimote_bt_test scan|connect <addr>`.
+  See "Real board on macOS" in `BALANCE_BOARD.md`.
+  Hardware test since then: doesn't work, macOS answers the Wii PIN with a fixed "0000".
+- **Real Wii devices through the Wii BT Bridge** (committed, f4cd52f; tested with the Pico W bridge + Balance
+  Board in Wii Fit U, and with the bridge repo's fake bridge): `src/input/api/Wiimote/bridge/WiiBridgeWiimote.{h,cpp}`,
+  a portable UDP backend for [wii-bt-bridge](https://github.com/jpaoad31/wii-bt-bridge) (a Pico W on a USB
+  network or a Pi does the Bluetooth, forwards raw reports). Settings `<Input><WiiBridge enabled host port/>`,
+  Balance Board panel controls (enable + address, Scan with bridge, Stop, status), env override
+  `CEMU_WII_BRIDGE=host[:port]`. Bridge devices are identified by Bluetooth address, so with b1ef6f4 they get
+  their previous index back. See "Through the Wii BT Bridge" in `BALANCE_BOARD.md`.
 
 - **Resolution overlay** (uncommitted until tested; `LatteOverlay.{h,cpp}`, `LatteRenderTarget.cpp`, `CemuConfig.*`,
   `GeneralSettings2.*`): Options -> General settings -> Overlay -> "Resolution". Per screen: the colour buffer the
@@ -180,8 +208,6 @@ publishing.
   backend, the texture cache. After the Fit Meter.
 - **An input expression editor** like Dolphin's: mouse axes, combined inputs, `timer()` and so on.
   Cemu only maps keys, buttons and sticks; the mouse is wired to GamePad touch and gyro.
-- **Real Balance Board passthrough** in the native Wiimote provider: the extension ID is wrong
-  (0x2A2C), and there's no 0x34 parsing or calibration read. The macOS HID path is untested.
 - **Upstream:** the `SYSTEM_LIBS` range is a general fix (Cemu has a precedent in HIGHMEM for
   Project Zero). Check Cemu's contribution rules on AI-written code before offering it.
 - Further quality-of-life items and bug fixes as the decomp turns them up.
