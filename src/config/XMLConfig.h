@@ -46,6 +46,10 @@ public:
 			return element->Int64Text(default_value);
 		else if constexpr (std::is_same_v<T, uint64>) // doesnt support real uint64...
 			return (uint64)element->Int64Text((sint64)default_value);
+		else if constexpr (std::is_integral_v<T> && std::is_signed_v<T> && sizeof(T) < sizeof(sint32)) // sint8, sint16
+			return (T)element->IntText(default_value);
+		else if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T> && sizeof(T) < sizeof(uint32)) // uint8, uint16
+			return (T)element->UnsignedText(default_value);
 		else if constexpr (std::is_same_v<T, const char*> || std::is_same_v<T, std::string> || HasConstCharConstructor<T>)
 		{
 			const char* text = element->GetText();
@@ -88,6 +92,10 @@ public:
 			return m_current_element->Int64Attribute(name, default_value);
 		else if constexpr (std::is_same_v<T, uint64>) // doesnt support real uint64...
 			return (uint64)m_current_element->Int64Attribute(name, (sint64)default_value);
+		else if constexpr (std::is_integral_v<T> && std::is_signed_v<T> && sizeof(T) < sizeof(sint32)) // sint8, sint16
+			return (T)m_current_element->IntAttribute(name, default_value);
+		else if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T> && sizeof(T) < sizeof(uint32)) // uint8, uint16
+			return (T)m_current_element->UnsignedAttribute(name, default_value);
 		else if constexpr (std::is_same_v<T, const char*> || std::is_same_v<T, std::string>)
 		{
 			const char* text = m_current_element->Attribute(name);
