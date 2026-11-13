@@ -153,6 +153,12 @@ target_include_directories(CemuWxGui PUBLIC "../")
 # PUBLIC because rapidjson/document.h is included in ChecksumTool.h
 target_include_directories(CemuWxGui PUBLIC ${RAPIDJSON_INCLUDE_DIRS})
 
+# The GUI's Wiimote code (Balance Board panel's bridge controls, the Wiimote controller settings
+# dialog) is behind SUPPORTS_WIIMOTE, which CemuInput only defines for itself.
+if (SUPPORTS_WIIMOTE)
+	target_compile_definitions(CemuWxGui PRIVATE SUPPORTS_WIIMOTE)
+endif()
+
 target_link_libraries(CemuWxGui PRIVATE
   CemuCommon
   CemuResource
