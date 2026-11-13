@@ -3,6 +3,9 @@
 #include "input/api/Controller.h"
 #include "input/InputManager.h"
 #include "Cafe/HW/Latte/Core/Latte.h"
+#ifdef SUPPORTS_WIIMOTE
+#include "input/api/Wiimote/NativeWiimoteController.h"
+#endif
 
 BalanceBoardController::BalanceBoardController(size_t player_index)
 	: WPADController(player_index, kDataFormat_BALANCE_CHECKER), m_ext_memory(BalanceBoardMath::BuildExtensionMemory())
@@ -51,6 +54,15 @@ bool BalanceBoardController::set_default_mapping(const std::shared_ptr<Controlle
 			{kButtonId_StepOffToggle, kButton3},
 		};
 		break;
+#ifdef SUPPORTS_WIIMOTE
+	case InputAPI::Wiimote:
+		// a real board: its front (power) button is its A button
+		mapping =
+		{
+			{kButtonId_Power, kWiimoteButton_A},
+		};
+		break;
+#endif
 	case InputAPI::XInput:
 		mapping =
 		{
@@ -161,8 +173,157 @@ std::array<uint16, BalanceBoardMath::kSensorCount> BalanceBoardController::compu
 	return raw;
 }
 
+BalanceBoardController::RealBoard BalanceBoardController::get_real_board() const
+{
+	RealBoard result{};
+#ifdef SUPPORTS_WIIMOTE
+	std::shared_ptr<NativeWiimoteController> wiimote;
+	{
+		std::shared_lock lock(m_mutex);
+		for (const auto& controller : m_controllers)
+		{
+			if (controller->api() != InputAPI::Wiimote)
+				continue;
+			wiimote = std::dynamic_pointer_cast<NativeWiimoteController>(controller);
+			if (wiimote)
+				break;
+		}
+	}
+	if (!wiimote)
+		return result;
+
+	result.assigned = true;
+	result.device_index = wiimote->get_index();
+	result.connected = wiimote->is_connected();
+	if (!result.connected)
+		return result;
+	result.is_board = wiimote->is_balance_board();
+	result.status_battery = wiimote->get_battery_level();
+	if (const auto data = wiimote->get_balance_board())
+	{
+		result.data = *data;
+		result.calibrated = data->has_calibration();
+		result.crc_ok = data->calibration_valid;
+		result.has_data = data->has_data();
+	}
+#endif
+	return result;
+}
+
+bool BalanceBoardController::uses_real_board() const
+{
+#ifdef SUPPORTS_WIIMOTE
+	std::shared_lock lock(m_mutex);
+	return std::any_of(m_controllers.cbegin(), m_controllers.cend(), [](const auto& c) { return c->api() == InputAPI::Wiimote; });
+#else
+	return false;
+#endif
+}
+
+void BalanceBoardController::send_real_command(uint8 command)
+{
+#ifdef SUPPORTS_WIIMOTE
+	std::shared_ptr<NativeWiimoteController> wiimote;
+	{
+		std::shared_lock lock(m_mutex);
+		for (const auto& controller : m_controllers)
+		{
+			if (controller->api() == InputAPI::Wiimote && (wiimote = std::dynamic_pointer_cast<NativeWiimoteController>(controller)))
+				break;
+		}
+	}
+	if (wiimote && wiimote->is_connected())
+		wiimote->send_balance_board_command(command);
+#endif
+}
+
+bool BalanceBoardController::is_real_calibration_pending() const
+{
+	const auto real = get_real_board();
+	if (!real.assigned)
+		return false;
+	if (real.connected && real.calibrated)
+		return false;
+	std::scoped_lock lock(m_real_mutex);
+	return !m_real_memory.has_value();
+}
+
+BalanceBoardMath::ExtMemory BalanceBoardController::get_extension_memory() const
+{
+	const auto real = get_real_board();
+	if (!real.assigned)
+		return m_ext_memory;
+
+	std::scoped_lock lock(m_real_mutex);
+	if (real.connected && real.calibrated)
+		m_real_memory = real.data.memory;
+	if (m_real_memory)
+		return *m_real_memory;
+	cemuLog_log(LogType::InputAPI, "BalanceBoard: the real board's calibration hasn't been read yet, using the emulated one");
+	return m_ext_memory;
+}
+
+uint8 BalanceBoardController::get_battery_raw() const
+{
+	const auto real = get_real_board();
+	if (real.assigned)
+	{
+		if (real.ready())
+			return real.data.battery;
+		std::scoped_lock lock(m_real_mutex);
+		return m_real_last ? m_real_last->battery : 0;
+	}
+	return BalanceBoardMath::BatteryPercentToRaw(m_battery);
+}
+
 void BalanceBoardController::fill_balance_status(WPADBLStatus_t& status)
 {
+	const auto real = get_real_board();
+	if (real.assigned)
+	{
+		// 0: ready, 1: not connected, 2: not a board, 3: no calibration/data yet
+		const int state = real.ready() ? 0 : !real.connected ? 1 : !real.is_board ? 2 : 3;
+		std::scoped_lock lock(m_real_mutex);
+		if (state != m_real_logged_state)
+		{
+			static constexpr const char* kStateNames[] = {"ready, the game gets its load cells",
+				"not connected", "connected but not a Balance Board", "waiting for its calibration and first report"};
+			cemuLog_log(LogType::InputAPI, "BalanceBoard: source is the real board (Wiimote device {}): {}", real.device_index, kStateNames[state]);
+			m_real_logged_state = state;
+		}
+		if (state == 0)
+		{
+			m_real_last = real.data;
+			m_real_memory = real.data.memory;
+		}
+		if (state == 0)
+		{
+			// the real board's raw values; the WBC library converts them with its calibration
+			for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
+				status.press[i] = real.data.raw[i];
+			status.temp = (sint8)real.data.temperature;
+			status.battery = real.data.battery;
+		}
+		else if (m_real_last && m_real_memory)
+		{
+			// lost the board: report an empty board (its 0 kg points) rather than a frozen weight
+			const auto cal = BalanceBoardMath::ParseCalibration(*m_real_memory);
+			for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
+				status.press[i] = cal.raw[i][0];
+			status.temp = (sint8)m_real_last->temperature;
+			status.battery = m_real_last->battery;
+		}
+		else
+		{
+			// nothing read yet: no load, no valid temperature
+			for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
+				status.press[i] = 0;
+			status.temp = 127;
+			status.battery = 0;
+		}
+		return;
+	}
+
 	const auto raw = get_sensor_values();
 	for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
 		status.press[i] = raw[i];

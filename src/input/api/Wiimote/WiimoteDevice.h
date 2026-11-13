@@ -11,9 +11,12 @@ public:
 
 	virtual bool operator==(const WiimoteDevice& o) const = 0;
 
-	// what stays the same when this device disconnects and reconnects (e.g. its Bluetooth address),
-	// so it can get its previous index back; empty if the backend can't tell
-	virtual std::string get_identity() const { return {}; }
+	// HID product name if the backend knows it ("Nintendo RVL-CNT-01", "Nintendo RVL-WBC-01", ...)
+	virtual std::string get_product_name() const { return {}; }
+	// where the device is (HID path or Bluetooth address), for logging
+	virtual std::string get_location() const { return {}; }
+	// what stays the same when this device reconnects (used to give it its previous index back)
+	virtual std::string get_identity() const { return get_location(); }
 };
 
 using WiimoteDevicePtr = std::shared_ptr<WiimoteDevice>;

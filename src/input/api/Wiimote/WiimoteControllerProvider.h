@@ -69,10 +69,19 @@ public:
 		}ir_camera{};
 
 		std::optional<MotionPlusData> m_motion_plus;
-		std::variant<std::monostate, NunchuckData, ClassicData> m_extension{};
+		std::variant<std::monostate, NunchuckData, ClassicData, BalanceBoardData> m_extension{};
+
+		// the HID name says Balance Board ("Nintendo RVL-WBC"); confirmed by the extension ID
+		bool balance_board_name = false;
+		bool is_balance_board() const { return balance_board_name || std::holds_alternative<BalanceBoardData>(m_extension); }
 	};
 	WiimoteState get_state(size_t index);
-	
+	// the Balance Board part of the state, if this device is a Balance Board (cheaper than get_state)
+	std::optional<BalanceBoardData> get_balance_board(size_t index);
+	bool is_balance_board(size_t index);
+	uint8 get_battery_level(size_t index);
+	// forwards a game's WPADControlBLC command (0x55 enable, 0xAA update, 0x00 temperature) to a real board
+	void send_balance_board_command(size_t index, uint8 command);
 
 private:
 	std::atomic_bool m_running = false;
@@ -96,6 +105,7 @@ private:
 		WiimoteState state{};
 
 		std::atomic_uint32_t data_delay = kDefaultPacketDelay;
+		std::atomic_uint8_t report_mode = 0; // last data report mode sent, for logging
 		std::chrono::high_resolution_clock::time_point data_ts{};
 	};
 	boost::ptr_vector<Wiimote> m_wiimotes;
@@ -126,6 +136,8 @@ private:
 	int parse_ir(WiimoteState& wiimote_state, const uint8* data);
 
 	void request_extension(size_t index);
+	void request_balance_board_calibration(size_t index);
+	void parse_balance_board(size_t index, WiimoteState& state, const uint8* data, size_t size);
 	void detect_motion_plus(size_t index);
 	void set_motion_plus(size_t index, bool state);
 

@@ -2,10 +2,18 @@
 
 #include "input/emulated/WPADController.h"
 #include "input/emulated/BalanceBoardMath.h"
+#include "input/api/Wiimote/WiimoteMessages.h"
 
 // Emulated Wii Balance Board ("balance checker"). It always sits on WPAD channel 3, where Wii
 // games (and Wii Fit U) expect it: see InputManager::set_controller.
 // The load cell maths come from Dolphin's emulated board (see BalanceBoardMath.h).
+//
+// Two sources:
+// - emulated (default): weight setting, Balance stick or mouse, step off hotkeys;
+// - a real board: when a "Wiimote" API controller is assigned to this controller, the game gets
+//   that board's raw load cells, temperature and battery and the calibration read from it
+//   (WiimoteControllerProvider reads them, see BalanceBoardData). The settings sliders and the
+//   step off hotkeys are then unused; Power is the board's A button.
 class BalanceBoardController : public WPADController
 {
 	using base_type = WPADController;
@@ -31,6 +39,28 @@ public:
 	};
 
 	BalanceBoardController(size_t player_index);
+
+	// a real board assigned to this controller (a "Wiimote" API controller)
+	struct RealBoard
+	{
+		bool assigned = false;   // a Wiimote API controller is assigned (the real board is the source)
+		bool connected = false;
+		bool is_board = false;   // the device identified as a Balance Board
+		bool calibrated = false; // its calibration block has been read
+		bool crc_ok = false;
+		bool has_data = false;   // load cell reports arrive
+		size_t device_index = 0;
+		uint8 status_battery = 0; // status report battery byte
+		BalanceBoardData data{};
+
+		bool ready() const { return connected && is_board && calibrated && has_data; }
+	};
+	RealBoard get_real_board() const;
+	bool uses_real_board() const;
+	// a real board is assigned but its calibration hasn't been read yet (WBC calibration waits)
+	bool is_real_calibration_pending() const;
+	// forwards a WPADControlBLC command to the real board, if one is the source
+	void send_real_command(uint8 command);
 
 	Type type() const override { return Type::BalanceBoard; }
 	WPADDeviceType get_device_type() const override { return kWAPDevBalanceChecker; }
@@ -73,9 +103,11 @@ public:
 	// raw values for a given state, without polling the step off keys
 	std::array<uint16, BalanceBoardMath::kSensorCount> compute_sensor_values(bool stepped_off) const;
 
-	// the board's extension memory (calibration block, CRC, temperature, ID)
-	const BalanceBoardMath::ExtMemory& get_extension_memory() const { return m_ext_memory; }
-	uint8 get_battery_raw() const { return BalanceBoardMath::BatteryPercentToRaw(m_battery); }
+	// the board's extension memory (calibration block, CRC, temperature, ID): the real board's
+	// when one is assigned and has been read, the emulated one otherwise
+	BalanceBoardMath::ExtMemory get_extension_memory() const;
+	// battery byte of WPADBLStatus (the real board's extension byte, or the Battery setting)
+	uint8 get_battery_raw() const;
 	int get_battery_level() const { return BalanceBoardMath::BatteryRawToLevel(get_battery_raw()); }
 
 	// settings
@@ -102,4 +134,10 @@ private:
 	std::atomic<bool> m_step_off_toggle_was_down = false;
 
 	BalanceBoardMath::ExtMemory m_ext_memory;
+
+	// last calibration and sample of the real board, kept while it is reconnecting
+	mutable std::mutex m_real_mutex;
+	mutable std::optional<BalanceBoardMath::ExtMemory> m_real_memory;
+	mutable std::optional<BalanceBoardData> m_real_last;
+	mutable int m_real_logged_state = -1;
 };

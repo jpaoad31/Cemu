@@ -1,3 +1,8 @@
+// Real Wii Balance Board support (detection, extension init, calibration read, report 0x34
+// parsing) follows Dolphin's real Wii Remote and balance board code (dolphin-emu/dolphin,
+// Source/Core/Core/HW/WiimoteReal/WiimoteReal.cpp, IOhidapi.cpp and
+// WiimoteEmu/Extension/BalanceBoard.cpp, GPL-2.0-or-later).
+
 #include "input/api/Wiimote/WiimoteControllerProvider.h"
 #include "input/api/Wiimote/NativeWiimoteController.h"
 #include "input/api/Wiimote/WiimoteMessages.h"
@@ -101,11 +106,17 @@ std::vector<std::shared_ptr<ControllerBase>> WiimoteControllerProvider::get_cont
 		if (ownIndex != -1)
 			lowestReplaceableIndex = ownIndex;
 
+		auto wiimote = std::make_unique<Wiimote>(device);
+		const auto product_name = device->get_product_name();
+		// Dolphin (WiimoteReal.cpp IsBalanceBoardName) checks the start of the name like Wii software
+		wiimote->state.balance_board_name = product_name.starts_with("Nintendo RVL-WBC");
 		const size_t new_index = lowestReplaceableIndex != -1 ? (size_t)lowestReplaceableIndex : m_wiimotes.size();
+		cemuLog_log(LogType::InputAPI, "Wiimote: found device {} \"{}\" at {}{}{}", new_index, product_name, device->get_location(),
+			wiimote->state.balance_board_name ? " (Balance Board by its name)" : "", ownIndex != -1 ? " (its previous index)" : "");
 		if (lowestReplaceableIndex != -1)
-			m_wiimotes.replace(lowestReplaceableIndex, std::make_unique<Wiimote>(device));
+			m_wiimotes.replace(lowestReplaceableIndex, std::move(wiimote));
 		else
-			m_wiimotes.push_back(std::make_unique<Wiimote>(device));
+			m_wiimotes.push_back(std::move(wiimote));
 		if (m_index_owner.size() <= new_index)
 			m_index_owner.resize(new_index + 1);
 		m_index_owner[new_index] = identity;
@@ -152,6 +163,13 @@ void WiimoteControllerProvider::request_status(size_t index)
 
 void WiimoteControllerProvider::set_led(size_t index, size_t player_index)
 {
+	// the Balance Board has a single LED (the blue power light), LED 1: lit while Cemu uses it
+	if (is_balance_board(index))
+	{
+		send_packet(index, {kLED, 0x10});
+		return;
+	}
+
 	uint8 mask = 0;
 	mask |= 1 << (4 + (player_index % 4));
 	if (player_index >= 4)
@@ -189,6 +207,69 @@ WiimoteControllerProvider::WiimoteState WiimoteControllerProvider::get_state(siz
 	}
 
 	return {};
+}
+
+std::optional<BalanceBoardData> WiimoteControllerProvider::get_balance_board(size_t index)
+{
+	std::shared_lock lock(m_device_mutex);
+	if (index < m_wiimotes.size())
+	{
+		std::shared_lock data_lock(m_wiimotes[index].mutex);
+		if (const auto* board = std::get_if<BalanceBoardData>(&m_wiimotes[index].state.m_extension))
+			return *board;
+	}
+	return {};
+}
+
+bool WiimoteControllerProvider::is_balance_board(size_t index)
+{
+	std::shared_lock lock(m_device_mutex);
+	if (index < m_wiimotes.size())
+	{
+		std::shared_lock data_lock(m_wiimotes[index].mutex);
+		return m_wiimotes[index].state.is_balance_board();
+	}
+	return false;
+}
+
+uint8 WiimoteControllerProvider::get_battery_level(size_t index)
+{
+	std::shared_lock lock(m_device_mutex);
+	if (index < m_wiimotes.size())
+	{
+		std::shared_lock data_lock(m_wiimotes[index].mutex);
+		return m_wiimotes[index].state.battery_level;
+	}
+	return 0;
+}
+
+// WPADControlBLC writes to the board's control register 0xF1: a key of three 0xAA and one 0x55,
+// then the command byte repeated (0x55, 0xAA); 0x00 is a single byte. 0xAA is followed by three
+// single-byte writes. Forwarded as the game issues them; only the register and the byte
+// sequence were taken from the Wii SDK's behaviour.
+void WiimoteControllerProvider::send_balance_board_command(size_t index, uint8 command)
+{
+	if (!is_balance_board(index))
+		return;
+	const std::vector<uint8> sequence{0xAA, 0xAA, 0xAA, 0x55, command, command, command};
+	switch (command)
+	{
+	case 0x55:
+		send_write_packet(index, kRegisterMemory, kRegisterBalanceBoardControl, sequence);
+		break;
+	case 0xAA:
+		send_write_packet(index, kRegisterMemory, kRegisterBalanceBoardControl, sequence);
+		for (int i = 0; i < 3; i++)
+			send_write_packet(index, kRegisterMemory, kRegisterBalanceBoardControl, {0xAA});
+		break;
+	case 0x00:
+		send_write_packet(index, kRegisterMemory, kRegisterBalanceBoardControl, {0xAA});
+		break;
+	default:
+		cemuLog_log(LogType::InputAPI, "BalanceBoard(real): device {}: unknown WPADControlBLC command 0x{:02x}, not sent", index, command);
+		return;
+	}
+	cemuLog_log(LogType::InputAPI, "BalanceBoard(real): device {}: sent WPADControlBLC command 0x{:02x} to register 0xf1", index, command);
 }
 
 void WiimoteControllerProvider::connectionThread()
@@ -270,6 +351,28 @@ void WiimoteControllerProvider::reader_thread()
 					new_state.battery_level = *data;
 					++data;
 
+					if (new_state.is_balance_board())
+					{
+						// the board has no IR camera, accelerometer or MotionPlus: only its extension
+						if (new_state.battery_level != wiimote.state.battery_level || new_state.flags != wiimote.state.flags)
+							cemuLog_log(LogType::InputAPI, "BalanceBoard(real): device {} status: battery 0x{:02x}, flags 0x{:02x}{}", index,
+								new_state.battery_level, new_state.flags, HAS_FLAG(new_state.flags, kExtensionConnected) ? "" : " (no extension flag!)");
+						if (HAS_FLAG(new_state.flags, kExtensionConnected))
+						{
+							const auto* board = std::get_if<BalanceBoardData>(&new_state.m_extension);
+							if (!board)
+								request_extension(index);
+							else if (!board->has_calibration())
+								request_balance_board_calibration(index); // retry a missing part
+						}
+						else
+						{
+							new_state.m_extension = {};
+						}
+						update_report = true;
+						break;
+					}
+
 					new_state.ir_camera.mode = set_ir_camera(index, true);
 					if(!new_state.m_calibrated)
 						calibrate(index);
@@ -301,6 +404,8 @@ void WiimoteControllerProvider::reader_thread()
 
 					if (error_flag)
 					{
+						if (new_state.is_balance_board())
+							cemuLog_log(LogType::InputAPI, "BalanceBoard(real): device {}: read error {:#x} at 0x{:04x}", index, error_flag, (uint16)*(betype<uint16>*)data);
 
 						// 7 means that wiimote is already enabled or not available
                         cemuLog_logDebug(LogType::Force,"Received error on data read {:#x}", error_flag);
@@ -309,6 +414,36 @@ void WiimoteControllerProvider::reader_thread()
 
 					auto address = *(betype<uint16>*)data;
 					data += 2;
+					const uint16 address16 = address;
+					auto* board = std::get_if<BalanceBoardData>(&new_state.m_extension);
+					if (board && (address16 == 0x20 || address16 == 0x30 || address16 == 0x60))
+					{
+						// calibration block of the board: 0x20..0x3F (two replies) and 0x60..0x61
+						const size_t count = std::min<size_t>(size, board->memory.size() - address16);
+						std::copy_n(data, count, board->memory.begin() + address16);
+						if (address16 == 0x20)
+							board->received_cal_0x20 = true;
+						else if (address16 == 0x30)
+							board->received_cal_0x30 = true;
+						else
+							board->received_cal_0x60 = true;
+						cemuLog_log(LogType::InputAPI, "BalanceBoard(real): device {}: calibration bytes 0x{:02x}: {:02x}", index, address16,
+							fmt::join(board->memory.begin() + address16, board->memory.begin() + address16 + count, " "));
+
+						if (board->has_calibration() && !board->calibration_logged)
+						{
+							const auto cal = BalanceBoardMath::ParseCalibration(board->memory);
+							board->calibration_valid = cal.valid;
+							board->calibration_logged = true;
+							cemuLog_log(LogType::InputAPI, "BalanceBoard(real): device {}: calibration CRC {:08x} stored / {:08x} computed: {}, version {}, reference temperature {}",
+								index, cal.crc_stored, cal.crc_computed, cal.valid ? "ok" : "MISMATCH", cal.version, cal.ref_temperature);
+							static constexpr const char* kSensorNames[] = {"TR", "BR", "TL", "BL"};
+							for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
+								cemuLog_log(LogType::InputAPI, "BalanceBoard(real):   {}: raw {} / {} / {} at {} / {} / {} kg", kSensorNames[i],
+									cal.raw[i][0], cal.raw[i][1], cal.raw[i][2], cal.load_kg[0], cal.load_kg[1], cal.load_kg[2]);
+						}
+						break;
+					}
 					if (address == (kRegisterCalibration & 0xFFFF))
 					{
                         cemuLog_logDebug(LogType::Force,"Calibration received");
@@ -349,6 +484,8 @@ void WiimoteControllerProvider::reader_thread()
 						}
 
 						cemu_assert(size == 6);
+						const std::array<uint8, 6> id_bytes{data[0], data[1], data[2], data[3], data[4], data[5]};
+						cemuLog_log(LogType::InputAPI, "Wiimote: device {} extension ID {:02x}", index, fmt::join(id_bytes, " "));
 						auto be_type = *(betype<uint64>*)data;
 						data += 6; // 48
 						be_type >>= 16;
@@ -374,8 +511,18 @@ void WiimoteControllerProvider::reader_thread()
                             cemuLog_logDebug(LogType::Force,"Extension Type Received: Drums");
                             break;
 						case kExtensionBalanceBoard:
-                            cemuLog_logDebug(LogType::Force,"Extension Type Received: Balance Board");
-                            break;
+							cemuLog_log(LogType::InputAPI, "BalanceBoard(real): device {} is a Balance Board, reading its calibration", index);
+							if (!std::holds_alternative<BalanceBoardData>(new_state.m_extension))
+							{
+								BalanceBoardData board_data{};
+								std::copy(id_bytes.begin(), id_bytes.end(), board_data.memory.begin() + BalanceBoardMath::kRegIdentifier);
+								new_state.m_extension = board_data;
+								// no IR camera on the board
+								new_state.ir_camera.mode = kIRDisabled;
+								new_state.ir_camera.dots = {};
+							}
+							request_balance_board_calibration(index);
+							break;
 						case kExtensionMotionPlus:
                             cemuLog_logDebug(LogType::Force,"Extension Type Received: MotionPlus");
 							set_motion_plus(index, true);
@@ -395,7 +542,7 @@ void WiimoteControllerProvider::reader_thread()
 							break;
 						}
 
-						if (new_state.m_extension.index() != 0)
+						if (new_state.m_extension.index() != 0 && !std::holds_alternative<BalanceBoardData>(new_state.m_extension))
 							send_read_packet(index, kRegisterMemory, kRegisterExtensionCalibration, 0x10);
 					}
 					else if (address == (kRegisterExtensionCalibration & 0xFFFF))
@@ -486,6 +633,7 @@ void WiimoteControllerProvider::reader_thread()
 					// 32 BB BB EE EE EE EE EE EE EE EE
 					new_state.buttons = *(uint16*)data & (~0x60E0);
 					data += 2;
+					parse_balance_board(index, new_state, data, read_data->size() - (data - read_data->data()));
 					break;
 				}
 			case kDataCoreAccIR:
@@ -501,6 +649,7 @@ void WiimoteControllerProvider::reader_thread()
 					// 34 BB BB EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE 
 					new_state.buttons = *(uint16*)data & (~0x60E0);
 					data += 2;
+					parse_balance_board(index, new_state, data, read_data->size() - (data - read_data->data()));
 					break;
 				}
 			case kDataCoreAccExt:
@@ -508,6 +657,7 @@ void WiimoteControllerProvider::reader_thread()
 					// 35 BB BB AA AA AA EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE
 					new_state.buttons = *(uint16*)data & (~0x60E0);
 					parse_acceleration(new_state, data);
+					parse_balance_board(index, new_state, data, read_data->size() - (data - read_data->data()));
 					break;
 				}
 			case kDataCoreIRExt:
@@ -688,6 +838,7 @@ void WiimoteControllerProvider::reader_thread()
 			case kDataExt:
 				{
 					// 3d EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE EE
+					parse_balance_board(index, new_state, data, read_data->size() - (data - read_data->data()));
 					break;
 				}
 			default:
@@ -949,6 +1100,45 @@ void WiimoteControllerProvider::request_extension(size_t index)
 	send_read_packet(index, kRegisterMemory, kRegisterExtensionType, 6);
 }
 
+// Dolphin (WiimoteEmu BalanceBoard.cpp): 0x20..0x3F = 01, reference battery, 00 00, the raw values
+// at 0/17/34 kg (TR, BR, TL, BL, u16 BE each), the CRC-32; 0x60 = reference temperature, version
+void WiimoteControllerProvider::request_balance_board_calibration(size_t index)
+{
+	send_read_packet(index, kRegisterMemory, kRegisterBalanceBoardCalibration, 0x20);
+	send_read_packet(index, kRegisterMemory, kRegisterBalanceBoardCalibration2, 2);
+}
+
+// Extension bytes of a board's data report: TR, BR, TL, BL (u16 BE), temperature, 0, battery
+void WiimoteControllerProvider::parse_balance_board(size_t index, WiimoteState& state, const uint8* data, size_t size)
+{
+	auto* board = std::get_if<BalanceBoardData>(&state.m_extension);
+	if (!board || size < 8)
+		return;
+
+	for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
+		board->raw[i] = (uint16)((data[i * 2] << 8) | data[i * 2 + 1]);
+	if (size >= 11)
+	{
+		board->temperature = data[8];
+		board->battery = data[10];
+	}
+	board->report_count++;
+
+	if (board->report_count <= 5 || (board->report_count % 6000) == 0)
+	{
+		std::array<double, BalanceBoardMath::kSensorCount> kg{};
+		if (board->has_calibration())
+		{
+			const auto cal = BalanceBoardMath::ParseCalibration(board->memory);
+			for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
+				kg[i] = BalanceBoardMath::RawToKg(cal, i, board->raw[i], cal.raw[i][0]);
+		}
+		cemuLog_log(LogType::InputAPI, "BalanceBoard(real): device {} report #{} ({} bytes): raw TR {} BR {} TL {} BL {} = {:.2f} {:.2f} {:.2f} {:.2f} kg{}, temperature {}, battery 0x{:02x}, buttons 0x{:04x}",
+			index, board->report_count, size, board->raw[0], board->raw[1], board->raw[2], board->raw[3], kg[0], kg[1], kg[2], kg[3],
+			board->has_calibration() ? "" : " (no calibration yet)", (sint8)board->temperature, board->battery, state.buttons);
+	}
+}
+
 void WiimoteControllerProvider::detect_motion_plus(size_t index)
 {
 	send_read_packet(index, kRegisterMemory, kRegisterMotionPlusDetect, 6);
@@ -1036,6 +1226,15 @@ void WiimoteControllerProvider::update_report_type(size_t index)
 	std::shared_lock read_lock(m_wiimotes[index].mutex);
 	auto& state = m_wiimotes[index].state;
 
+	if (state.is_balance_board())
+	{
+		// buttons + 19 extension bytes (load cells, temperature, battery), continuous
+		if (m_wiimotes[index].report_mode.exchange(kDataCoreExt19) != kDataCoreExt19)
+			cemuLog_log(LogType::InputAPI, "BalanceBoard(real): device {}: report mode 0x{:02x} (continuous)", index, (uint8)kDataCoreExt19);
+		send_packet(index, {kType, 0x04, kDataCoreExt19});
+		return;
+	}
+
 	const bool extension = state.m_extension.index() != 0; // TODO || HasMotionPlus();
 	const bool ir = state.ir_camera.mode != kIRDisabled;
 	const bool motion = true; // UseMotion();
@@ -1059,6 +1258,8 @@ void WiimoteControllerProvider::update_report_type(size_t index)
 		report_type = kDataCore;
 
     cemuLog_logDebug(LogType::Force,"Setting report type to {}", report_type);
+	if (m_wiimotes[index].report_mode.exchange(report_type) != report_type)
+		cemuLog_log(LogType::InputAPI, "Wiimote: device {}: report mode 0x{:02x}", index, (uint8)report_type);
 	send_packet(index, {kType, 0x04, report_type});
 
 	state.ir_camera.mode = set_ir_camera(index, true);

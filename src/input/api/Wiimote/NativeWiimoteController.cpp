@@ -80,6 +80,21 @@ bool NativeWiimoteController::is_mpls_attached() const
 	return m_provider->get_state(m_index).m_motion_plus.has_value();
 }
 
+bool NativeWiimoteController::is_balance_board() const
+{
+	return m_provider->is_balance_board(m_index);
+}
+
+std::optional<BalanceBoardData> NativeWiimoteController::get_balance_board() const
+{
+	return m_provider->get_balance_board(m_index);
+}
+
+uint8 NativeWiimoteController::get_battery_level() const
+{
+	return m_provider->get_battery_level(m_index);
+}
+
 bool NativeWiimoteController::has_position()
 {
 	const auto state = m_provider->get_state(m_index);

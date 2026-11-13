@@ -5,9 +5,13 @@
 #include <wx/statline.h>
 #include <wx/textctrl.h>
 #include <wx/slider.h>
+#include <wx/button.h>
+#include <wx/timer.h>
+#include <wx/checkbox.h>
 
 #include "wxgui/helpers/wxHelpers.h"
 #include "wxgui/components/wxInputDraw.h"
+
 
 BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 	: InputPanel(parent)
@@ -17,9 +21,10 @@ BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 
 	auto* main_sizer = new wxBoxSizer(wxVERTICAL);
 
-	auto* info = new wxStaticText(this, wxID_ANY, _("The Balance Board always uses Wii Remote channel 4 (WPAD channel 3). Use a Wiimote on another controller for the menus."));
+	auto* info = new wxStaticText(this, wxID_ANY, _("The Balance Board always uses Wii Remote channel 4 (WPAD channel 3). Use a Wiimote on another controller for the menus.\nReal board: pair it in the Bluetooth settings, then add it here with API \"Wiimote\". With a Wiimote controller added, the real board is the source and the options below are unused."));
 	info->Wrap(600);
 	main_sizer->Add(info, 0, wxALL, 5);
+
 	main_sizer->Add(new wxStaticLine(this), 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, 5);
 
 	m_item_sizer = new wxGridBagSizer();
@@ -135,6 +140,12 @@ void BalanceBoardInputPanel::on_setting_changed(wxCommandEvent& event)
 	}
 }
 
+BalanceBoardInputPanel::~BalanceBoardInputPanel()
+{
+}
+
+
+
 void BalanceBoardInputPanel::on_timer(const EmulatedControllerPtr& emulated_controller, const ControllerPtr& controller)
 {
 	InputPanel::on_timer(emulated_controller, controller);
@@ -143,18 +154,69 @@ void BalanceBoardInputPanel::on_timer(const EmulatedControllerPtr& emulated_cont
 	if (!board)
 		return;
 
-	m_draw->SetAxisValue(board->get_axis());
+	wxString label;
+	const auto real = board->get_real_board();
+	if (real.assigned)
+	{
+		// a real board is the source: its own load cells, converted with its own calibration
+		wxString state;
+		if (!real.connected)
+			state = _("not connected (connect or pair it, then wait a few seconds)");
+		else if (!real.is_board)
+			state = _("connected, but this Wii Remote is not a Balance Board");
+		else if (!real.calibrated)
+			state = _("connected, reading its calibration...");
+		else if (!real.has_data)
+			state = _("connected, waiting for its first report...");
+		else
+			state = real.crc_ok ? _("ready, calibration CRC ok") : _("ready, but the calibration CRC does NOT match");
+		label = wxString::Format(_("Source: real Balance Board (Wiimote %d): %s"), (int)real.device_index + 1, state);
 
-	const auto raw = board->get_sensor_values();
-	double kg[BalanceBoardMath::kSensorCount];
-	for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
-		kg[i] = BalanceBoardMath::RawToKg(raw[i]);
-	const auto label = wxString::Format(_("%s  Total %.1f kg (TL %.1f  TR %.1f  BL %.1f  BR %.1f)"),
-		board->is_stepped_off() ? _("Stepped off.") : _("On the board."),
-		kg[0] + kg[1] + kg[2] + kg[3], kg[BalanceBoardMath::kTopLeft], kg[BalanceBoardMath::kTopRight],
-		kg[BalanceBoardMath::kBottomLeft], kg[BalanceBoardMath::kBottomRight]);
+		if (real.calibrated && real.has_data)
+		{
+			const auto cal = BalanceBoardMath::ParseCalibration(real.data.memory);
+			double kg[BalanceBoardMath::kSensorCount];
+			std::array<double, BalanceBoardMath::kSensorCount> sensors;
+			for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
+				sensors[i] = kg[i] = BalanceBoardMath::RawToKg(cal, i, real.data.raw[i], cal.raw[i][0]);
+			double x, y;
+			BalanceBoardMath::SensorsToCenterOfBalance(sensors, x, y);
+			m_draw->SetAxisValue({(float)x, (float)y});
+			label += wxString::Format(_("\nTotal %.1f kg (TL %.1f  TR %.1f  BL %.1f  BR %.1f)  Temperature %d  Battery 0x%02x (level %d/4)%s"),
+				kg[0] + kg[1] + kg[2] + kg[3], kg[BalanceBoardMath::kTopLeft], kg[BalanceBoardMath::kTopRight],
+				kg[BalanceBoardMath::kBottomLeft], kg[BalanceBoardMath::kBottomRight], (int)(sint8)real.data.temperature,
+				real.data.battery, BalanceBoardMath::BatteryRawToLevel(real.data.battery), (board->is_a_down() ? _("  Power pressed") : wxString()));
+		}
+		else
+			m_draw->SetAxisValue({});
+	}
+	else
+	{
+		m_draw->SetAxisValue(board->get_axis());
+
+		const auto raw = board->get_sensor_values();
+		double kg[BalanceBoardMath::kSensorCount];
+		for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
+			kg[i] = BalanceBoardMath::RawToKg(raw[i]);
+		label = wxString::Format(_("Source: emulated. %s  Total %.1f kg (TL %.1f  TR %.1f  BL %.1f  BR %.1f)"),
+			board->is_stepped_off() ? _("Stepped off.") : _("On the board."),
+			kg[0] + kg[1] + kg[2] + kg[3], kg[BalanceBoardMath::kTopLeft], kg[BalanceBoardMath::kTopRight],
+			kg[BalanceBoardMath::kBottomLeft], kg[BalanceBoardMath::kBottomRight]);
+	}
+
+	// the options only drive the emulated board
+	if (m_weight->IsEnabled() == real.assigned)
+	{
+		for (auto* slider : {m_weight, m_foot_separation, m_foot_length, m_battery})
+			slider->Enable(!real.assigned);
+	}
 	if (m_status->GetLabel() != label)
+	{
+		const bool relayout = m_status->GetLabel().Freq('\n') != label.Freq('\n');
 		m_status->SetLabel(label);
+		if (relayout)
+			Layout();
+	}
 }
 
 void BalanceBoardInputPanel::load_controller(const EmulatedControllerPtr& emulated_controller)

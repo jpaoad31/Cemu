@@ -35,6 +35,15 @@ public:
 	Extension get_extension() const;
 	bool is_mpls_attached() const;
 
+	// real Wii Balance Board (identified by its extension ID or HID name)
+	bool is_balance_board() const;
+	// load cells, temperature, battery and the calibration read from the board
+	std::optional<BalanceBoardData> get_balance_board() const;
+	// battery byte of the last status report
+	uint8 get_battery_level() const;
+	size_t get_index() const { return m_index; }
+	void send_balance_board_command(uint8 command) { m_provider->send_balance_board_command(m_index, command); }
+
 	ControllerState raw_state() override;
 
 	bool has_position() override;

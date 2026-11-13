@@ -713,7 +713,8 @@ namespace padscore
 #pragma region Balance Board (BLC / WBC)
 
 	// The Balance Board ("balance checker") is an emulated BalanceBoardController on WPAD
-	// channel 3. The WPAD BLC calls serve its extension memory (calibration block). The WBC
+	// channel 3, fed either by its own emulation or by a real board assigned to it (then the
+	// calibration memory and the raw load cells are the real board's). The WPAD BLC calls serve its extension memory (calibration block). The WBC
 	// library turns its raw load cell values into kilograms; this is a clean implementation of
 	// that behaviour (see BalanceBoardMath.h), not a translation of Nintendo's code.
 
@@ -731,6 +732,7 @@ namespace padscore
 		BalanceBoardMath::Calibration cal{};
 		double zero[BalanceBoardMath::kSensorCount]{}; // raw value of each load cell with nothing on the board
 		bool zero_set = false;
+		bool setup_pending = false; // WBCSetupCalibration waits for a real board's calibration
 
 		// logging
 		uint32 read_count = 0;
@@ -773,11 +775,14 @@ namespace padscore
 	}
 
 	// commands: 0x55 enable, 0xAA update, 0x00 start a temperature reading. The emulated board
-	// always reports a valid temperature, so all of them simply succeed.
+	// always reports a valid temperature, so all of them simply succeed; a real board gets the
+	// command forwarded.
 	sint32 WPADControlBLC(sint32 channel, uint32 command, MPTR callback)
 	{
 		const auto board = GetBalanceBoard(channel);
 		const sint32 result = board ? WPAD_ERR_NONE : WPAD_ERR_NO_CONTROLLER;
+		if (board && board->uses_real_board())
+			board->send_real_command((uint8)command);
 		cemuLog_log(LogType::InputAPI, "BalanceBoard: WPADControlBLC({}, 0x{:02x}) -> {}", channel, command, result);
 		if (callback != MPTR_NULL)
 			coreinitAsyncCallback_add(callback, 2, channel, (uint32)result);
@@ -815,9 +820,23 @@ namespace padscore
 
 	// Reads and checks the board's calibration. TRUE if a board is there (the calibration is then
 	// ready at once; WBCGetCalibrationStatus reports whether its CRC was valid).
+	static void WBCLoadCalibration(const BalanceBoardController& board)
+	{
+		const auto& cal = g_wbc.cal = BalanceBoardMath::ParseCalibration(board.get_extension_memory());
+		g_wbc.calibrated = cal.valid;
+		g_wbc.read_count = 0;
+		g_wbc.last_read_result = 0x7FFFFFFF;
+		cemuLog_log(LogType::InputAPI, "BalanceBoard: WBCSetupCalibration(): {} board, CRC {:08x}/{:08x} {}, version {}, reference temperature {}",
+			board.uses_real_board() ? "real" : "emulated", cal.crc_stored, cal.crc_computed, cal.valid ? "ok" : "MISMATCH", cal.version, cal.ref_temperature);
+		for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
+			cemuLog_log(LogType::InputAPI, "BalanceBoard:   sensor {}: {} / {} / {} at {} / {} / {} kg", i,
+				cal.raw[i][0], cal.raw[i][1], cal.raw[i][2], cal.load_kg[0], cal.load_kg[1], cal.load_kg[2]);
+	}
+
 	uint32 WBCSetupCalibration()
 	{
 		g_wbc.calibrated = false;
+		g_wbc.setup_pending = false;
 		const auto board = GetBalanceBoard(BalanceBoardController::kWPADChannel);
 		if (!board)
 		{
@@ -825,20 +844,28 @@ namespace padscore
 			return FALSE;
 		}
 
-		const auto& cal = g_wbc.cal = BalanceBoardMath::ParseCalibration(board->get_extension_memory());
-		g_wbc.calibrated = cal.valid;
-		g_wbc.read_count = 0;
-		g_wbc.last_read_result = 0x7FFFFFFF;
-		cemuLog_log(LogType::InputAPI, "BalanceBoard: WBCSetupCalibration(): CRC {:08x}/{:08x} {}, version {}, reference temperature {}",
-			cal.crc_stored, cal.crc_computed, cal.valid ? "ok" : "MISMATCH", cal.version, cal.ref_temperature);
-		for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
-			cemuLog_log(LogType::InputAPI, "BalanceBoard:   sensor {}: {} / {} / {} at {} / {} / {} kg", i,
-				cal.raw[i][0], cal.raw[i][1], cal.raw[i][2], cal.load_kg[0], cal.load_kg[1], cal.load_kg[2]);
+		if (board->is_real_calibration_pending())
+		{
+			// like the real library, calibration completes later: WBCGetCalibrationStatus polls
+			g_wbc.setup_pending = true;
+			cemuLog_log(LogType::InputAPI, "BalanceBoard: WBCSetupCalibration(): waiting for the real board's calibration");
+			return TRUE;
+		}
+		WBCLoadCalibration(*board);
 		return TRUE;
 	}
 
 	uint32 WBCGetCalibrationStatus()
 	{
+		if (!g_wbc.calibrated && g_wbc.setup_pending)
+		{
+			const auto board = GetBalanceBoard(BalanceBoardController::kWPADChannel);
+			if (board && !board->is_real_calibration_pending())
+			{
+				g_wbc.setup_pending = false;
+				WBCLoadCalibration(*board);
+			}
+		}
 		return g_wbc.calibrated ? TRUE : FALSE;
 	}
 

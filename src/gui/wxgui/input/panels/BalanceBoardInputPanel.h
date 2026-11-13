@@ -7,11 +7,17 @@ class wxGridBagSizer;
 class wxInputDraw;
 class wxSlider;
 class wxStaticText;
+class wxButton;
+class wxTimer;
+class wxTimerEvent;
+class wxCheckBox;
+class wxTextCtrl;
 
 class BalanceBoardInputPanel : public InputPanel
 {
 public:
 	BalanceBoardInputPanel(wxWindow* parent);
+	~BalanceBoardInputPanel() override;
 
 	void on_timer(const EmulatedControllerPtr& emulated_controller, const ControllerPtr& controller) override;
 	void load_controller(const EmulatedControllerPtr& emulated_controller) override;
@@ -36,6 +42,8 @@ private:
 	wxStaticText* m_battery_text;
 
 	wxStaticText* m_status;
+
+
 
 	std::weak_ptr<BalanceBoardController> m_board;
 };

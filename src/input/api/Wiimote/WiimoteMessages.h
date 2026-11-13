@@ -1,5 +1,7 @@
 #pragma once
 
+#include "input/emulated/BalanceBoardMath.h"
+
 // https://wiibrew.org/wiki/Wiimote
 
 enum InputReportId : uint8
@@ -37,6 +39,9 @@ enum RegisterAddress : uint32
 	kRegisterExtension2 = 0x4a400fb,
 	kRegisterExtensionType = 0x4a400fa,
 	kRegisterExtensionCalibration = 0x4a40020,
+	kRegisterBalanceBoardCalibration = 0x4a40020, // 0x20 bytes: info, 0/17/34 kg per load cell, CRC
+	kRegisterBalanceBoardCalibration2 = 0x4a40060, // 2 bytes: reference temperature, version
+	kRegisterBalanceBoardControl = 0x4a400f1, // WPADControlBLC commands
 
 	kRegisterMotionPlusDetect = 0x4a600fa,
 	kRegisterMotionPlusInit = 0x4a600f0,
@@ -51,7 +56,7 @@ enum ExtensionType : uint64
 	kExtensionDrawsome = 0xFF00A4200013,
 	kExtensionGuitar = 0x0000A4200103,
 	kExtensionDrums = 0x0100A4200103,
-	kExtensionBalanceBoard = 0x2A2C,
+	kExtensionBalanceBoard = 0x0000A4200402, // 00 00 a4 20 04 02, permanently attached to the board
 
 	kExtensionMotionPlusInactive = 0xa4200005,
 	kExtensionMotionPlus = 0xa6200005,
@@ -242,4 +247,29 @@ struct ClassicData
 	glm::vec2 trigger{};
 	glm::vec<2, uint8> raw_trigger{};
 	uint16 buttons = 0;
+};
+
+// Real Wii Balance Board: a Wii Remote (057e:0306, "Nintendo RVL-WBC-01") with a permanently
+// attached extension 00 00 a4 20 04 02. Its extension registers hold the calibration (0x20..0x3F,
+// 0x60..0x61, see BalanceBoardMath.h) and report 0x32/0x34 carries 11 bytes of extension data:
+// TR, BR, TL, BL (u16 big-endian load cells), temperature, padding, battery.
+// Protocol as in Dolphin's balance board code (WiimoteReal.cpp IsBalanceBoard, WiimoteEmu
+// Extension/BalanceBoard.cpp; GPL-2.0-or-later).
+struct BalanceBoardData
+{
+	// the board's extension memory as read from it (calibration blocks and the identifier)
+	BalanceBoardMath::ExtMemory memory{};
+	bool received_cal_0x20 = false;
+	bool received_cal_0x30 = false;
+	bool received_cal_0x60 = false;
+	bool calibration_logged = false;
+	bool calibration_valid = false; // CRC matched
+
+	std::array<uint16, BalanceBoardMath::kSensorCount> raw{}; // TR, BR, TL, BL
+	uint8 temperature = 0;
+	uint8 battery = 0; // extension battery byte (WPADBLStatus::battery)
+	uint32 report_count = 0;
+
+	bool has_calibration() const { return received_cal_0x20 && received_cal_0x30 && received_cal_0x60; }
+	bool has_data() const { return report_count > 0; }
 };
