@@ -16,6 +16,7 @@
 #ifdef HAS_IOBLUETOOTH
 #include "input/api/Wiimote/darwin/IOBluetoothWiimote.h"
 #endif
+#include "input/api/Wiimote/bridge/WiiBridgeWiimote.h"
 
 #include <numbers>
 #include <queue>
@@ -281,6 +282,9 @@ void WiimoteControllerProvider::connectionThread()
 	while (m_running.load(std::memory_order_relaxed))
 	{
 		std::vector<WiimoteDevicePtr> devices;
+		// devices connected through a Wii BT Bridge (UDP); off unless enabled in the settings
+		const auto& bridgeDevices = WiiBridgeWiimote::get_devices();
+		std::ranges::move(bridgeDevices, std::back_inserter(devices));
 #ifdef HAS_IOBLUETOOTH
 		// devices connected directly over IOBluetooth (no pairing); first, so hidapi can skip them
 		const auto& btDevices = IOBluetoothWiimote::get_devices();

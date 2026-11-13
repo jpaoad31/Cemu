@@ -510,6 +510,15 @@ struct CemuConfig
 		ConfigValue<uint16> port{ 26760 };
 	}dsu_client{};
 
+	// Wii BT Bridge (wii-bt-bridge: a Pico W / Pi that connects real Wii Remotes and Balance Boards
+	// over Bluetooth and forwards their raw reports over UDP)
+	struct
+	{
+		ConfigValue<bool> enabled{false};
+		ConfigValue<std::string> host{"192.168.7.1"};
+		ConfigValue<uint16> port{ 4730 };
+	}wii_bridge{};
+
 	// debug
 	ConfigValueBounds<CrashDump> crash_dump{ CrashDump::Disabled };
 	ConfigValue<uint16> gdb_port{ 1337 };

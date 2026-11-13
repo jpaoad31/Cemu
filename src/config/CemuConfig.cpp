@@ -284,6 +284,12 @@ XMLConfigParser CemuConfig::Load(XMLConfigParser& parser)
 	auto dsuc = input.get("DSUC");
 	dsu_client.host = dsuc.get_attribute("host", dsu_client.host);
 	dsu_client.port = dsuc.get_attribute("port", dsu_client.port);
+	auto wiibridge = input.get("WiiBridge");
+	wii_bridge.enabled = wiibridge.get_attribute("enabled", wii_bridge.enabled);
+	wii_bridge.host = wiibridge.get_attribute("host", wii_bridge.host);
+	if (wii_bridge.host.GetValue().empty())   // an empty address was saved by an earlier build
+		wii_bridge.host = wii_bridge.host.GetInitValue();
+	wii_bridge.port = wiibridge.get_attribute("port", wii_bridge.port);
 
 	// emulatedusbdevices
 	auto usbdevices = parser.get("EmulatedUsbDevices");
@@ -450,6 +456,10 @@ XMLConfigParser CemuConfig::Save(XMLConfigParser& parser)
 	auto dsuc = input.set("DSUC");
 	dsuc.set_attribute("host", dsu_client.host);
 	dsuc.set_attribute("port", dsu_client.port);
+	auto wiibridge = input.set("WiiBridge");
+	wiibridge.set_attribute("enabled", wii_bridge.enabled);
+	wiibridge.set_attribute("host", wii_bridge.host);
+	wiibridge.set_attribute("port", wii_bridge.port);
 
 	// emulated usb devices
 	auto usbdevices = config.set("EmulatedUsbDevices");
