@@ -63,6 +63,8 @@ namespace WiiBridge
 		bool from_environment = false;   // CEMU_WII_BRIDGE is set
 		std::string endpoint;            // "192.168.7.1:4730"
 		bool bridge_answering = false;   // HELLO_ACK within the last 3 s
+		bool busy = false;               // the bridge answers BUSY: another program owns it
+		std::string busy_owner;          // that program's address, "192.168.7.2:62657"
 		int firmware_version = 0;
 		std::string bridge_address;      // the bridge's own Bluetooth address
 		bool scanning = false;

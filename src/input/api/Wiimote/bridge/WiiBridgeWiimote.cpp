@@ -29,6 +29,7 @@ namespace
 	constexpr uint8 MSG_SCAN_STATE = 0x82;  // [scanning]
 	constexpr uint8 MSG_CONNECTED = 0x83;   // [slot][bt addr 6][name...]
 	constexpr uint8 MSG_DISCONNECTED = 0x84;// [slot][reason]
+	constexpr uint8 MSG_BUSY = 0x85;        // [owner IPv4 4][owner port 2, BE] another host owns the bridge
 	constexpr uint8 MSG_DATA_IN = 0x90;     // [slot][report...] without the 0xA1 header
 	constexpr uint8 MSG_LOG = 0xF0;         // [text...]
 
@@ -116,6 +117,10 @@ namespace
 			status.endpoint = m_endpoint_text;
 			status.bridge_answering = m_last_ack != std::chrono::steady_clock::time_point{} &&
 				std::chrono::steady_clock::now() - m_last_ack < kBridgeTimeout;
+			const auto now = std::chrono::steady_clock::now();
+			status.busy = m_last_busy != std::chrono::steady_clock::time_point{} && now - m_last_busy < kBridgeTimeout &&
+				m_last_busy > m_last_ack;
+			status.busy_owner = m_busy_owner;
 			status.firmware_version = m_firmware_version;
 			status.bridge_address = m_bridge_address;
 			status.scanning = m_scanning;
@@ -309,6 +314,21 @@ namespace
 				state->reports.emplace_back(m + 2, m + len);
 				break;
 			}
+			case MSG_BUSY:
+			{
+				// one host at a time: another program (e.g. another emulator) owns the bridge
+				if (len < 7)
+					return;
+				std::string owner = fmt::format("{}.{}.{}.{}:{}", m[1], m[2], m[3], m[4], (m[5] << 8) | m[6]);
+				std::scoped_lock lock(m_mutex);
+				m_last_busy = std::chrono::steady_clock::now();
+				if (owner != m_busy_owner)
+				{
+					cemuLog_log(LogType::InputAPI, "WiiBridge: the bridge is in use by another program at {}; waiting until it stops", owner);
+					m_busy_owner = std::move(owner);
+				}
+				break;
+			}
 			case MSG_LOG:
 			{
 				std::string text(reinterpret_cast<const char*>(m + 1), len - 1);
@@ -337,6 +357,8 @@ namespace
 		std::mutex m_mutex;
 		std::array<std::shared_ptr<WiiBridgeDeviceState>, kMaxSlots> m_slots{};
 		std::chrono::steady_clock::time_point m_last_ack{};
+		std::chrono::steady_clock::time_point m_last_busy{};
+		std::string m_busy_owner;
 		int m_logged_version = -1;
 		int m_firmware_version = 0;
 		std::string m_bridge_address;

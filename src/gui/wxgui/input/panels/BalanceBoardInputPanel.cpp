@@ -260,6 +260,9 @@ void BalanceBoardInputPanel::on_bridge_timer(wxTimerEvent& event)
 	wxString label;
 	if (!status.enabled)
 		label = _("Bridge off.");
+	else if (status.busy)
+		label = wxString::Format(_("The bridge at %s is in use by another program (%s). Close it (e.g. another emulator) to use the bridge here."),
+			wxString::FromUTF8(status.endpoint), wxString::FromUTF8(status.busy_owner));
 	else if (!status.bridge_answering)
 		label = wxString::Format(_("No answer from the bridge at %s (plugged in? the USB network up?)"), wxString::FromUTF8(status.endpoint));
 	else
