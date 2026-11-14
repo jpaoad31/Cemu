@@ -5,6 +5,7 @@
 //#include "ax.h"
 #include "config/CemuConfig.h"
 #include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
+#include "audio/WiimoteSpeakerMixer.h"
 
 namespace snd_core
 {
@@ -217,9 +218,26 @@ namespace snd_core
 		return nullptr;
 	}
 
+	// Wii Remote speakers played through system audio (WiimoteSpeakerMixer): added to the front
+	// left and right channels (or the only one) of the TV's 48 kHz output, before it's converted.
+	// TV only: the GamePad has its own audio stream, which Wii Remote sound never goes into.
+	static void AXOut_MixWiimoteSpeakers(sint32* planarOutput, sint32 numSamples, sint32 channelCount)
+	{
+		float speaker[AX_SAMPLES_MAX];
+		if (numSamples > AX_SAMPLES_MAX || !WiimoteSpeakerMixer::Render(speaker, (size_t)numSamples))
+			return;
+		for (sint32 c = 0; c < std::min(channelCount, 2); c++)
+		{
+			sint32* channel = planarOutput + numSamples * c;
+			for (sint32 i = 0; i < numSamples; i++)
+				channel[i] = _swapEndianS32(_swapEndianS32(channel[i]) + (sint32)speaker[i]);
+		}
+	}
+
 	void AXOut_SubmitTVFrame(sint32 frameIndex)
 	{
 		sint32 numSamples = AIGetSamplesPerChannel(AX_DEV_TV);
+		AXOut_MixWiimoteSpeakers(__AXTVBuffer48.GetPtr(), numSamples, AIGetChannelCount(AX_DEV_TV));
 		if (__AXMode[AX_DEV_TV] == AX_MODE_6CH)
 		{
 			sint32* inputChannel0 = __AXTVBuffer48.GetPtr() + numSamples * 0;

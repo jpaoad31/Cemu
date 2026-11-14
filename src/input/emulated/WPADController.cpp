@@ -4,10 +4,28 @@
 #include "input/emulated/ClassicController.h"
 #include "input/emulated/ProController.h"
 #include "input/emulated/WiimoteController.h"
+#ifdef SUPPORTS_WIIMOTE
+#include "input/api/Wiimote/NativeWiimoteController.h"
+#endif
 
 WPADController::WPADController(size_t player_index, WPADDataFormat data_format)
 	: EmulatedController(player_index), m_data_format(data_format)
 {
+}
+
+std::shared_ptr<NativeWiimoteController> WPADController::get_native_wiimote() const
+{
+#ifdef SUPPORTS_WIIMOTE
+	std::shared_lock lock(m_mutex);
+	for (const auto& controller : m_controllers)
+	{
+		if (controller->api() != InputAPI::Wiimote)
+			continue;
+		if (auto wiimote = std::dynamic_pointer_cast<NativeWiimoteController>(controller))
+			return wiimote;
+	}
+#endif
+	return {};
 }
 
 WPADDataFormat WPADController::get_default_data_format() const

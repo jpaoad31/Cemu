@@ -402,6 +402,12 @@ namespace snd_core
 	{
 		// snd_core
 		cafeExportRegister("snd_core", AXSetVoiceDeviceMix, LogType::SoundAPI);
+		cafeExportRegister("snd_core", AXSetVoiceRmtOn, LogType::SoundAPI);
+		cafeExportRegister("snd_core", AXSetVoiceRmtIIR, LogType::SoundAPI);
+		cafeExportRegister("snd_core", AXSetVoiceRmtIIRCoefs, LogType::SoundAPI);
+		cafeExportRegister("snd_core", AXRmtGetSamplesLeft, LogType::Placeholder); // every 6.67 ms
+		cafeExportRegister("snd_core", AXRmtGetSamples, LogType::Placeholder);
+		cafeExportRegister("snd_core", AXRmtAdvancePtr, LogType::Placeholder);
 		cafeExportRegister("snd_core", AXComputeLpfCoefs, LogType::SoundAPI);
 
 		cafeExportRegister("snd_core", AXSetVoiceState, LogType::SoundAPI);
@@ -434,6 +440,12 @@ namespace snd_core
 
 		// sndcore2
 		cafeExportRegister("sndcore2", AXSetVoiceDeviceMix, LogType::SoundAPI);
+		cafeExportRegister("sndcore2", AXSetVoiceRmtOn, LogType::SoundAPI);
+		cafeExportRegister("sndcore2", AXSetVoiceRmtIIR, LogType::SoundAPI);
+		cafeExportRegister("sndcore2", AXSetVoiceRmtIIRCoefs, LogType::SoundAPI);
+		cafeExportRegister("sndcore2", AXRmtGetSamplesLeft, LogType::Placeholder); // every 6.67 ms
+		cafeExportRegister("sndcore2", AXRmtGetSamples, LogType::Placeholder);
+		cafeExportRegister("sndcore2", AXRmtAdvancePtr, LogType::Placeholder);
 		cafeExportRegister("sndcore2", AXComputeLpfCoefs, LogType::SoundAPI);
 
 		cafeExportRegister("sndcore2", AXSetVoiceState, LogType::SoundAPI);

@@ -43,6 +43,11 @@ enum RegisterAddress : uint32
 	kRegisterBalanceBoardCalibration2 = 0x4a40060, // 2 bytes: reference temperature, version
 	kRegisterBalanceBoardControl = 0x4a400f1, // WPADControlBLC commands
 
+	// speaker (0xA20000-0xA20009)
+	kRegisterSpeakerConfig = 0x4a20001, // 7 bytes: 0x00, format, rate (u16 LE), volume, 0x0C, 0x0E
+	kRegisterSpeakerPlay = 0x4a20008,
+	kRegisterSpeakerEnable = 0x4a20009,
+
 	kRegisterMotionPlusDetect = 0x4a600fa,
 	kRegisterMotionPlusInit = 0x4a600f0,
 	kRegisterMotionPlusEnable = 0x4a600fe,

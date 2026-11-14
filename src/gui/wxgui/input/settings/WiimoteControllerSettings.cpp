@@ -8,6 +8,7 @@
 #include <wx/statline.h>
 #include <wx/checkbox.h>
 #include <wx/statbox.h>
+#include <wx/choice.h>
 
 #include "wxgui/helpers/wxControlObject.h"
 #include "wxgui/helpers/wxHelpers.h"
@@ -76,6 +77,17 @@ WiimoteControllerSettings::WiimoteControllerSettings(wxWindow* parent, const wxP
 				new wxControlObject(range_text));
 
 			box_sizer->Add(row_sizer);
+		}
+		{
+			// where the game's Wii Remote speaker sound goes (order = WiimoteSpeaker::Output)
+			auto* row_sizer = new wxBoxSizer(wxHORIZONTAL);
+			row_sizer->Add(new wxStaticText(box, wxID_ANY, _("Speaker")), 0, wxALL | wxALIGN_CENTER_VERTICAL, 5);
+			const wxString choices[] = {_("Wii Remote speaker"), _("System audio"), _("Both"), _("Off")};
+			m_speaker_output = new wxChoice(box, wxID_ANY, wxDefaultPosition, wxDefaultSize, std::size(choices), choices);
+			m_speaker_output->SetSelection((int)m_controller->get_speaker_output());
+			m_speaker_output->SetToolTip(_("Where the game's Wii Remote speaker sound plays: this Wii Remote's own speaker, mixed into Cemu's audio output (TV), both, or nowhere"));
+			row_sizer->Add(m_speaker_output, 1, wxALL | wxEXPAND, 5);
+			box_sizer->Add(row_sizer, 0, wxEXPAND);
 		}
 
 		sizer->Add(box_sizer, 0, wxALL | wxEXPAND, 5);
@@ -251,6 +263,8 @@ void WiimoteControllerSettings::update_settings()
 		m_controller->set_use_motion(m_use_motion->GetValue());
 
 	m_controller->set_packet_delay(m_package_delay->GetValue());
+	if (m_speaker_output && m_speaker_output->GetSelection() != wxNOT_FOUND)
+		m_controller->set_speaker_output((WiimoteSpeaker::Output)m_speaker_output->GetSelection());
 }
 
 void WiimoteControllerSettings::on_timer(wxTimerEvent& event)

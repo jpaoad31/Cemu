@@ -126,6 +126,9 @@ public:
 	// kDataFormat_BALANCE_CHECKER: fills press[], temp and battery (BalanceBoardController)
 	virtual void fill_balance_status(WPADBLStatus_t& status) {}
 
+	// the real Wii Remote among this controller's inputs (API Wiimote), if any
+	std::shared_ptr<class NativeWiimoteController> get_native_wiimote() const;
+
 	enum class ConnectCallbackStatus
 	{
 		None, // do nothing

@@ -46,6 +46,10 @@ add_library(CemuInput
 	emulated/BalanceBoardController.h
 	emulated/BalanceBoardMath.cpp
 	emulated/BalanceBoardMath.h
+	emulated/WiimoteSpeakerCodec.cpp
+	emulated/WiimoteSpeakerCodec.h
+	emulated/WiimoteSpeaker.cpp
+	emulated/WiimoteSpeaker.h
 )
 
 set_property(TARGET CemuInput PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

@@ -111,6 +111,7 @@ std::vector<std::shared_ptr<ControllerBase>> WiimoteControllerProvider::get_cont
 			lowestReplaceableIndex = ownIndex;
 
 		auto wiimote = std::make_unique<Wiimote>(device);
+		wiimote->connection_id = m_next_connection_id++;
 		const auto product_name = device->get_product_name();
 		// Dolphin (WiimoteReal.cpp IsBalanceBoardName) checks the start of the name like Wii software
 		wiimote->state.balance_board_name = product_name.starts_with("Nintendo RVL-WBC");
@@ -140,6 +141,12 @@ bool WiimoteControllerProvider::is_connected(size_t index)
 {
 	std::shared_lock lock(m_device_mutex);
 	return index < m_wiimotes.size() && m_wiimotes[index].device;
+}
+
+uint32 WiimoteControllerProvider::get_connection_id(size_t index)
+{
+	std::shared_lock lock(m_device_mutex);
+	return index < m_wiimotes.size() && m_wiimotes[index].device ? m_wiimotes[index].connection_id : 0;
 }
 
 bool WiimoteControllerProvider::is_registered_device(size_t index)
@@ -1172,10 +1179,11 @@ void WiimoteControllerProvider::set_motion_plus(size_t index, bool state)
 void WiimoteControllerProvider::writer_thread()
 {
 	SetThreadName("Wiimote-writer");
+	std::vector<DueSpeakerReport> due_speaker_reports;
 	while (m_running.load(std::memory_order_relaxed))
 	{
 		std::unique_lock writer_lock(m_writer_mutex);
-		while (m_write_queue.empty())
+		while (m_write_queue.empty() && m_speaker_queued == 0)
 		{
 			if (m_writer_cond.wait_for(writer_lock, std::chrono::milliseconds(250)) == std::cv_status::timeout)
 			{
@@ -1187,6 +1195,9 @@ void WiimoteControllerProvider::writer_thread()
 		auto index = (size_t)-1;
 		std::vector<uint8> data;
 		std::shared_lock device_lock(m_device_mutex);
+
+		// speaker reports: their own paced queue, independent of the packet delay
+		writer_take_speaker_reports(due_speaker_reports);
 
 		// get first packet of device which is ready to be sent
 		const auto now = std::chrono::high_resolution_clock::now();
@@ -1205,6 +1216,8 @@ void WiimoteControllerProvider::writer_thread()
 			}
 		}
 		writer_lock.unlock();
+
+		writer_send_speaker_reports(due_speaker_reports);
 
 		if (index != (size_t)-1 && !data.empty())
 		{
@@ -1225,6 +1238,63 @@ void WiimoteControllerProvider::writer_thread()
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		std::this_thread::yield();
+	}
+}
+
+// writer thread, with m_writer_mutex held: takes the speaker reports that are due, at most one
+// per device per pass (written by writer_send_speaker_reports once the lock is released)
+void WiimoteControllerProvider::writer_take_speaker_reports(std::vector<DueSpeakerReport>& due)
+{
+	due.clear();
+	if (m_speaker_queued == 0)
+		return;
+	const auto now = std::chrono::steady_clock::now();
+	for (auto& [index, speaker] : m_speaker)
+	{
+		if (speaker.queue.empty() || !speaker.pacer.IsDue(now))
+			continue;
+		const bool stream = speaker.queue.front().stream;
+		due.push_back({index, std::move(speaker.queue.front().data), stream});
+		speaker.queue.pop_front();
+		m_speaker_queued--;
+		if (stream)
+			speaker.stream_queued--;
+		speaker.pacer.OnSent(now);
+	}
+}
+
+// writer thread, with a shared m_device_mutex held (not m_writer_mutex)
+void WiimoteControllerProvider::writer_send_speaker_reports(std::vector<DueSpeakerReport>& due)
+{
+	for (auto& report : due)
+	{
+		if (report.index >= m_wiimotes.size() || !m_wiimotes[report.index].device)
+			continue;
+		auto& wiimote = m_wiimotes[report.index];
+		if (wiimote.rumble)
+			report.data[1] |= 1;
+		if (!wiimote.device->write_data(report.data) || !report.stream)
+			continue; // a dead device is noticed by the reader
+
+		std::unique_lock lock(m_writer_mutex);
+		auto& speaker = m_speaker[report.index];
+		const auto now = std::chrono::steady_clock::now();
+		speaker.sent++;
+		speaker.window_sent++;
+		if (speaker.window_start == std::chrono::steady_clock::time_point{})
+		{
+			speaker.window_start = now;
+			cemuLog_log(LogType::InputAPI, "WiimoteSpeaker: device {}: first stream report sent", report.index);
+		}
+		constexpr uint64 kSpeakerStatsReports = 1500; // ~10 s at 6 kHz ADPCM
+		if (speaker.window_sent >= kSpeakerStatsReports)
+		{
+			const double seconds = std::chrono::duration<double>(now - speaker.window_start).count();
+			cemuLog_log(LogType::InputAPI, "WiimoteSpeaker: device {}: {} stream reports in {:.2f} s = {:.1f}/s (target {:.1f}/s), {} sent in total, {} dropped, {} resyncs",
+				report.index, speaker.window_sent, seconds, speaker.window_sent / seconds, 1e9 / speaker.pacer.Interval().count(), speaker.sent, speaker.dropped, speaker.pacer.Resyncs());
+			speaker.window_sent = 0;
+			speaker.window_start = now;
+		}
 	}
 }
 
@@ -1338,8 +1408,7 @@ void WiimoteControllerProvider::send_read_packet(size_t index, MemoryType type, 
 	send_packet(index, std::move(data));
 }
 
-void WiimoteControllerProvider::send_write_packet(size_t index, MemoryType type, RegisterAddress address,
-                                                  const std::vector<uint8>& data)
+static std::vector<uint8> build_write_packet(MemoryType type, RegisterAddress address, const std::vector<uint8>& data)
 {
 	cemu_assert(data.size() <= 16);
 	std::vector<uint8> packet(6 + 16);
@@ -1348,5 +1417,118 @@ void WiimoteControllerProvider::send_write_packet(size_t index, MemoryType type,
 	*(betype<uint32>*)(packet.data() + 2) = (address & 0xFFFFFF) << 8; // only uint24
 	*(packet.data() + 2 + 3) = (uint8)data.size();
 	std::copy(data.begin(), data.end(), packet.data() + 2 + 3 + 1);
-	send_packet(index, std::move(packet));
+	return packet;
+}
+
+void WiimoteControllerProvider::send_write_packet(size_t index, MemoryType type, RegisterAddress address,
+                                                  const std::vector<uint8>& data)
+{
+	send_packet(index, build_write_packet(type, address, data));
+}
+
+// Speaker. The sequences are what WPADControlSpeaker sends on a Wii / Wii U (learned from the Wii
+// SDK's behaviour, decomp read only; register layout as on wiibrew and in Dolphin):
+//   on:   0x14 enable, 0x19 mute, 0x01 -> 0xA20009, 0x80 -> 0xA20001, config -> 0xA20001, 0x19 unmute
+//   off:  0x19 mute, 0x01 -> 0xA20001, 0x00 -> 0xA20009, 0x14 disable
+//   play: 0x01 -> 0xA20008
+// Stream data: report 0x18, [length << 3][20 bytes].
+
+void WiimoteControllerProvider::speaker_queue(size_t index, std::vector<uint8> report, bool stream)
+{
+	std::unique_lock lock(m_writer_mutex);
+	auto& speaker = m_speaker[index];
+	speaker.queue.push_back({std::move(report), stream});
+	if (stream)
+		speaker.stream_queued++;
+	m_speaker_queued++;
+	m_writer_cond.notify_one();
+}
+
+void WiimoteControllerProvider::speaker_on(size_t index, const WiimoteSpeakerCodec::Config& config)
+{
+	{
+		std::unique_lock lock(m_writer_mutex);
+		auto& speaker = m_speaker[index];
+		// a new stream: drop what's left of the old one
+		m_speaker_queued -= speaker.queue.size();
+		speaker.queue.clear();
+		speaker.stream_queued = 0;
+		speaker.pacer.Reset();
+		speaker.pacer.SetInterval(config.ReportInterval());
+		speaker.window_sent = 0;
+		speaker.window_start = {};
+	}
+	uint8 reg[7];
+	WiimoteSpeakerCodec::BuildConfigRegister(config, reg);
+	speaker_queue(index, {kSpeakerState, 0x04}, false);
+	speaker_queue(index, {kSpeakerMute, 0x04}, false);
+	speaker_queue(index, build_write_packet(kRegisterMemory, kRegisterSpeakerEnable, {0x01}), false);
+	speaker_queue(index, build_write_packet(kRegisterMemory, kRegisterSpeakerConfig, {0x80}), false);
+	speaker_queue(index, build_write_packet(kRegisterMemory, kRegisterSpeakerConfig, std::vector<uint8>(reg, reg + 7)), false);
+	speaker_queue(index, {kSpeakerMute, 0x00}, false);
+	cemuLog_log(LogType::InputAPI, "WiimoteSpeaker: device {}: speaker on, config {:02x} (format 0x{:02x}, rate value 0x{:04x} = {} Hz, volume {}), one report every {:.2f} ms",
+		index, fmt::join(reg, reg + 7, " "), config.format, config.rate, config.SampleRate(), config.volume, config.ReportInterval().count() / 1e6);
+}
+
+void WiimoteControllerProvider::speaker_off(size_t index)
+{
+	{
+		std::unique_lock lock(m_writer_mutex);
+		if (const auto it = m_speaker.find(index); it != m_speaker.end())
+		{
+			auto& speaker = it->second;
+			if (speaker.stream_queued)
+				cemuLog_log(LogType::InputAPI, "WiimoteSpeaker: device {}: speaker off, {} queued stream reports dropped", index, speaker.stream_queued);
+			m_speaker_queued -= speaker.queue.size();
+			speaker.queue.clear();
+			speaker.stream_queued = 0;
+		}
+	}
+	speaker_queue(index, {kSpeakerMute, 0x04}, false);
+	speaker_queue(index, build_write_packet(kRegisterMemory, kRegisterSpeakerConfig, {0x01}), false);
+	speaker_queue(index, build_write_packet(kRegisterMemory, kRegisterSpeakerEnable, {0x00}), false);
+	speaker_queue(index, {kSpeakerState, 0x00}, false);
+	cemuLog_log(LogType::InputAPI, "WiimoteSpeaker: device {}: speaker off", index);
+}
+
+void WiimoteControllerProvider::speaker_mute(size_t index, bool mute)
+{
+	speaker_queue(index, {kSpeakerMute, (uint8)(mute ? 0x04 : 0x00)}, false);
+	cemuLog_log(LogType::InputAPI, "WiimoteSpeaker: device {}: {}", index, mute ? "mute" : "unmute");
+}
+
+void WiimoteControllerProvider::speaker_play(size_t index)
+{
+	speaker_queue(index, build_write_packet(kRegisterMemory, kRegisterSpeakerPlay, {0x01}), false);
+	cemuLog_log(LogType::InputAPI, "WiimoteSpeaker: device {}: play", index);
+}
+
+bool WiimoteControllerProvider::speaker_can_send(size_t index)
+{
+	if (!is_connected(index))
+		return false;
+	std::unique_lock lock(m_writer_mutex);
+	const auto it = m_speaker.find(index);
+	return it == m_speaker.end() || it->second.stream_queued < kSpeakerQueueMax;
+}
+
+bool WiimoteControllerProvider::speaker_send(size_t index, const uint8* data, size_t length)
+{
+	length = std::min(length, WiimoteSpeakerCodec::kReportDataSize);
+	std::vector<uint8> report(2 + WiimoteSpeakerCodec::kReportDataSize, 0);
+	report[0] = kSpeakerData;
+	report[1] = (uint8)(length << 3);
+	std::copy_n(data, length, report.begin() + 2);
+	{
+		std::unique_lock lock(m_writer_mutex);
+		auto& speaker = m_speaker[index];
+		if (speaker.stream_queued >= kSpeakerQueueMax)
+		{
+			if (speaker.dropped++ % 150 == 0)
+				cemuLog_log(LogType::InputAPI, "WiimoteSpeaker: device {}: stream queue full, report dropped ({} dropped so far)", index, speaker.dropped);
+			return false;
+		}
+	}
+	speaker_queue(index, std::move(report), true);
+	return true;
 }

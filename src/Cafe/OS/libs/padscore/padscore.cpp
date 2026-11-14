@@ -7,6 +7,7 @@
 #include "WindowSystem.h"
 #include "input/InputManager.h"
 #include "input/emulated/BalanceBoardController.h"
+#include "input/emulated/WiimoteSpeaker.h"
 #include "Cafe/CafeSystem.h"
 #include "config/CemuConfig.h"
 
@@ -141,7 +142,7 @@ static_assert(sizeof(WPADInfo_t) == 0x18); // unsure
 static void WPADFillInfo(uint32 channel, WPADController& controller, WPADInfo_t* wpadInfo)
 {
 	wpadInfo->dpd = FALSE;
-	wpadInfo->speaker = FALSE;
+	wpadInfo->speaker = WiimoteSpeaker::IsEnabled(channel) ? TRUE : FALSE;
 	wpadInfo->attach = FALSE;
 	wpadInfo->lowBat = FALSE;
 	wpadInfo->nearempty = FALSE;
@@ -1051,6 +1052,7 @@ namespace padscore
 	}
 	void start()
 	{
+		speaker_reset();
 		OSCreateAlarm(&g_padscore.alarm);
 		const uint64 start_tick = coreinit::OSGetTime();
 		const uint64 period_tick = coreinit::EspressoTime::GetTimerClock() / 200; // every 5ms
@@ -1083,6 +1085,9 @@ namespace padscore
 			cafeExportRegister("padscore", WBCRead, LogType::Placeholder); // every frame: logs its own summary
 			cafeExportRegister("padscore", WBCGetTGCWeight, LogType::InputAPI);
 			cafeExportRegister("padscore", WBCGetBatteryLevel, LogType::InputAPI);
+
+			// Wii Remote speaker and the WENC encoder
+			speaker_load();
 
 			// wpad
 			//osLib_addFunction("padscore", "WPADInit", padscore::export_WPADInit);

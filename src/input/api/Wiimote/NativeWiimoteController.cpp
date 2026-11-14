@@ -16,6 +16,8 @@ void NativeWiimoteController::save(pugi::xml_node& node)
 
 	node.append_child("packet_delay").append_child(pugi::node_pcdata).set_value(
 		fmt::format("{}", m_packet_delay).c_str());
+	node.append_child("speaker_output").append_child(pugi::node_pcdata).set_value(
+		std::string(WiimoteSpeaker::OutputToString(m_speaker_output)).c_str());
 }
 
 void NativeWiimoteController::load(const pugi::xml_node& node)
@@ -24,6 +26,8 @@ void NativeWiimoteController::load(const pugi::xml_node& node)
 
 	if (const auto value = node.child("packet_delay"))
 		m_packet_delay = ConvertString<uint32>(value.child_value());
+	if (const auto value = node.child("speaker_output"))
+		m_speaker_output = WiimoteSpeaker::OutputFromString(value.child_value(), WiimoteSpeaker::Output::Remote);
 }
 
 bool NativeWiimoteController::connect()

@@ -290,6 +290,9 @@ XMLConfigParser CemuConfig::Load(XMLConfigParser& parser)
 	if (wii_bridge.host.GetValue().empty())   // an empty address was saved by an earlier build
 		wii_bridge.host = wii_bridge.host.GetInitValue();
 	wii_bridge.port = wiibridge.get_attribute("port", wii_bridge.port);
+	auto wiimotespeaker = input.get("WiimoteSpeaker");
+	wiimote_speaker.emulated = wiimotespeaker.get_attribute("emulated", wiimote_speaker.emulated);
+	wiimote_speaker.volume = wiimotespeaker.get_attribute("volume", wiimote_speaker.volume);
 
 	// emulatedusbdevices
 	auto usbdevices = parser.get("EmulatedUsbDevices");
@@ -460,6 +463,9 @@ XMLConfigParser CemuConfig::Save(XMLConfigParser& parser)
 	wiibridge.set_attribute("enabled", wii_bridge.enabled);
 	wiibridge.set_attribute("host", wii_bridge.host);
 	wiibridge.set_attribute("port", wii_bridge.port);
+	auto wiimotespeaker = input.set("WiimoteSpeaker");
+	wiimotespeaker.set_attribute("emulated", wiimote_speaker.emulated);
+	wiimotespeaker.set_attribute("volume", wiimote_speaker.volume);
 
 	// emulated usb devices
 	auto usbdevices = config.set("EmulatedUsbDevices");

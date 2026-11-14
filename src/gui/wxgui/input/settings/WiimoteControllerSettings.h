@@ -12,6 +12,7 @@
 class wxStaticBox;
 class wxStaticText;
 class wxCheckBox;
+class wxChoice;
 class wxInputDraw;
 
 class WiimoteControllerSettings : public wxDialog
@@ -34,6 +35,7 @@ private:
 	wxStaticText* m_extension_text;
 
 	wxSlider* m_package_delay;
+	wxChoice* m_speaker_output = nullptr;
 	wxCheckBox* m_rumble = nullptr;
 	wxCheckBox* m_use_motion = nullptr;
 

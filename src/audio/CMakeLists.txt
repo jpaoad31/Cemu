@@ -3,6 +3,8 @@ add_library(CemuAudio
 	IAudioAPI.h
 	IAudioInputAPI.cpp
 	IAudioInputAPI.h
+	WiimoteSpeakerMixer.cpp
+	WiimoteSpeakerMixer.h
 )
 
 set_property(TARGET CemuAudio PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

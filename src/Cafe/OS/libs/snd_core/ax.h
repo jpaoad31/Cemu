@@ -37,6 +37,7 @@ namespace snd_core
 	const int AX_TV_CHANNEL_COUNT = 6;
 	const int AX_DRC_CHANNEL_COUNT = 4;
 	const int AX_RMT_CHANNEL_COUNT = 1;
+	const int AX_RMT_DEVICE_COUNT = 4; // one per Wii Remote speaker
 	
 	const int AX_APP_FRAME_CALLBACK_MAX = 64;
 
@@ -226,6 +227,9 @@ namespace snd_core
 	sint32 AXVoiceBegin(AXVPB* voice);
 	sint32 AXVoiceEnd(AXVPB* voice);
 	sint32 AXSetVoiceDeviceMix(AXVPB* vpb, sint32 device, sint32 deviceIndex, AXCHMIX_DEPR* mix);
+	void AXSetVoiceRmtOn(AXVPB* vpb, uint16 on);
+	void AXSetVoiceRmtIIR(AXVPB* vpb, void* iir);
+	void AXSetVoiceRmtIIRCoefs(AXVPB* vpb, uint16 type);
 	void AXSetVoiceState(AXVPB* vpb, sint32 voiceState);
 	sint32 AXIsVoiceRunning(AXVPB* vpb);
 	void AXSetVoiceType(AXVPB* vpb, uint16 voiceType);
@@ -328,6 +332,14 @@ namespace snd_core
 	void AXMix_DepopVoice(struct AXVPBInternal_t* internalShadowCopy);
 
 	void AXMix_process(struct AXVPBInternal_t* internalShadowCopyHead);
+
+	// AX remote output (Wii Remote speakers, ax_rmt.cpp)
+	void AXRmt_Init();
+	void AXRmt_MixVoice(struct AXVPBInternal_t* internalShadowCopy, float* sampleData, sint32 sampleCount);
+	void AXRmt_ProcessFrame();
+	sint32 AXRmtGetSamplesLeft();
+	sint32 AXRmtGetSamples(sint32 remote, sint16be* buffer, sint32 count);
+	sint32 AXRmtAdvancePtr(sint32 count);
 
 	extern FSpinlock __AXVoiceListSpinlock;
 

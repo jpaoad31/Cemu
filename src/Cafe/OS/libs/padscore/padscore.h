@@ -7,6 +7,10 @@ namespace padscore
 {
 	void start();
 	COSModule* GetModule();
+
+	// Wii Remote speaker and WENC (padscore_speaker.cpp)
+	void speaker_load();
+	void speaker_reset();
 }
 
 constexpr int kWPADMaxControllers = 4;

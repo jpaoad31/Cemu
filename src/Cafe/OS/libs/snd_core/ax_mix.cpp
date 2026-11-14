@@ -23,6 +23,7 @@ namespace snd_core
 	void AXMix_Init()
 	{
 		AXSetDefaultMixerSelect(AX_MIXER_SELECT_PPC);
+		AXRmt_Init();
 	}
 
 	void AXMix_DepopVoice(AXVPBInternal_t* internalShadowCopy)
@@ -848,8 +849,11 @@ namespace snd_core
 			}
 		}
 
-		// DRC1 mixing + RMT mixing
+		// DRC1 mixing
 		// todo
+
+		// RMT mixing (Wii Remote speakers)
+		AXRmt_MixVoice(internalShadowCopy, sampleData, sampleCount);
 	}
 
 	void AXMix_ProcessVoices(AXVPBInternal_t* firstVoice)
@@ -1004,6 +1008,7 @@ namespace snd_core
 		memset(__AXMixBufferDRC, 0, sizeof(__AXMixBufferDRC));
 
 		AXMix_ProcessVoices(internalShadowCopyHead);
+		AXRmt_ProcessFrame();
 		AXAux_Process(); // apply AUX effects to previous frame
 		AXIst_HandleFrameCallbacks();
 

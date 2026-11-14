@@ -525,7 +525,7 @@ namespace snd_core
 		}
 		else if (device == AX_DEV_RMT)
 		{
-			if (deviceIndex < 0 || deviceIndex >= 4)
+			if (deviceIndex < 0 || deviceIndex >= AX_RMT_DEVICE_COUNT)
 				return -2;
 		}
 		else
@@ -577,9 +577,10 @@ namespace snd_core
 		}
 		else if (device == AX_DEV_RMT)
 		{
-			// Wii Remote speaker output isn't emulated: accept the mix and ignore it (voiceMix was
-			// left uninitialised here, which was unreachable while AXIsValidDevice rejected AX_DEV_RMT)
-			return 0;
+			// one channel and AX_BUS_COUNT buses per remote
+			channelCount = AX_RMT_CHANNEL_COUNT;
+			voiceMix = internal->deviceMixRMT + deviceIndex * AX_BUS_COUNT;
+			deviceMixMask = internal->deviceMixMaskRMT + deviceIndex * AX_BUS_COUNT;
 		}
 		else
 			return -1;
@@ -607,6 +608,24 @@ namespace snd_core
 		vpb->sync = (uint32)vpb->sync | (AX_SYNCFLAG_DEVICEMIXMASK | AX_SYNCFLAG_DEVICEMIX);
 		AXVoiceProtection_Acquire(vpb);
 		return 0;
+	}
+
+	// routes the voice to the Wii Remote speakers (mixed with AXSetVoiceDeviceMix, AX_DEV_RMT)
+	void AXSetVoiceRmtOn(AXVPB* vpb, uint16 on)
+	{
+		AXVPBInternal_t* internal = __AXVPBInternalVoiceArray + (sint32)vpb->index;
+		internal->reserved148_voiceRmtOn = on ? 1 : 0;
+		AXSetSyncFlag(vpb, AX_SYNCFLAG_VOICEREMOTEON);
+		AXVoiceProtection_Acquire(vpb);
+	}
+
+	// remote speaker filter: accepted, not applied (it only shapes the sound for the small speaker)
+	void AXSetVoiceRmtIIR(AXVPB* vpb, void* iir)
+	{
+	}
+
+	void AXSetVoiceRmtIIRCoefs(AXVPB* vpb, uint16 type)
+	{
 	}
 
 	void AXSetVoiceState(AXVPB* vpb, sint32 voiceState)

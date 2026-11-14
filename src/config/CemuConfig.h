@@ -519,6 +519,14 @@ struct CemuConfig
 		ConfigValue<uint16> port{ 4730 };
 	}wii_bridge{};
 
+	// Wii Remote speaker played through Cemu's audio (see input/emulated/WiimoteSpeaker.h). Real
+	// Wii Remotes choose their output in their controller settings; these apply to all.
+	struct
+	{
+		ConfigValue<std::string> emulated{"system"}; // output for emulated Wii Remotes: system / off
+		ConfigValue<sint32> volume{100};              // percent of the speaker's own volume (0-400)
+	}wiimote_speaker{};
+
 	// debug
 	ConfigValueBounds<CrashDump> crash_dump{ CrashDump::Disabled };
 	ConfigValue<uint16> gdb_port{ 1337 };

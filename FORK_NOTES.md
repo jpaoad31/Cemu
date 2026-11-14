@@ -12,7 +12,8 @@ the macOS camera (40e4ce9), Stop emulation and the shutdown fixes (1428abd).
 General upstream bugs found during the Wii BT Bridge work, one commit each (reference fixes
 for issues, not PRs): the Wiimote GUI code compiled out since the wxWidgets split (73a7ed8), the Input settings window
 not resizable / not growing with its panel (a1e935b), XMLConfigParser ignoring 8/16-bit integers so the DSU port never
-loads (9aee914), Wii Remotes swapping indices when they reconnect in a different order (b1ef6f4).
+loads (9aee914), Wii Remotes swapping indices when they reconnect in a different order (b1ef6f4). Found during the
+Wii Remote speaker work: AXIsValidDevice checking AX_DEV_TV twice, so the Wii Remote device was always rejected (855d224).
 
 - **`SYSTEM_LIBS` memory range** (0x01000000-0x017FFFFF, readable). Wii Fit U reads past its
   two-entry pointing-device table (`jet::ui::UICore::Read`) into 0x011004xx. That range is mapped
@@ -142,6 +143,31 @@ loads (9aee914), Wii Remotes swapping indices when they reconnect in a different
   `CEMU_WII_BRIDGE=host[:port]`. Bridge devices are identified by Bluetooth address, so with b1ef6f4 they get
   their previous index back. See "Through the Wii BT Bridge" in `BALANCE_BOARD.md`.
 
+- **Wii Remote speaker** (branch `wiimote-speaker`; committed before a test with a real remote): games' remote speaker
+  sound plays on the real Wii Remote, through Cemu's audio, both, or nowhere.
+  - AX remote output (`snd_core/ax_rmt.cpp`, `ax_voice.cpp`, `ax_mix.cpp`): `AXSetVoiceRmtOn`, `AXSetVoiceDeviceMix(AX_DEV_RMT)`
+    (was rejected: `AXIsValidDevice` checked AX_DEV_TV twice), main-bus mix per remote, downsampled to 6 kHz (18 samples
+    per 3 ms frame) into a ring read with `AXRmtGetSamplesLeft/GetSamples/AdvancePtr`. `AXSetVoiceRmtIIR(Coefs)` accepted,
+    not applied. Test hook `CEMU_AX_RMT_TEST_TONE=<Hz>` (2 s on / 2 s off on every remote).
+  - padscore (`padscore_speaker.cpp`): `WPADControlSpeaker` (off/on/mute/unmute/play/5, callback), `WPADIsSpeakerEnabled`,
+    `WPADCanSendStreamData`, `WPADSendStreamData`, `WPADGet/SetSpeakerVolume` (default 89, the Wii's), `WENCGetEncodeData`;
+    `WPADInfo.speaker`. The speaker per channel and the routing: `input/emulated/WiimoteSpeaker.*`; codec (Yamaha ADPCM,
+    decoder from Dolphin, own encoder) and the report pacer: `input/emulated/WiimoteSpeakerCodec.*` + standalone test.
+  - Real remote (`WiimoteControllerProvider`): Wii setup sequence (0x14, 0x19, 0xA20009, 0xA20001 config `00 00 d0 07 vol 0c 0e`,
+    unmute; play = 0xA20008), a separate per-device queue in the writer thread, paced one report per 6.67 ms; re-setup when the
+    remote reconnects. System audio: `audio/WiimoteSpeakerMixer.*`, added to the TV's 48 kHz mix in `ax_out.cpp`, never the GamePad's
+    (on a Wii U the GamePad has its own audio stream). Jitter buffer: starts at 30 ms; Dolphin-style rate correction
+    (at most 0.625% faster/slower) keeps it there without audible jumps; trimmed above 150 ms as a backstop.
+  - Settings: real remotes: "Speaker" in the Wiimote controller settings (profile `<speaker_output>`, default the remote's
+    own speaker only: a connected remote behaves like on a real Wii U with no setup); global
+    `<Input><WiimoteSpeaker emulated="system|off" volume="100"/>` (no UI).
+  - **For the input settings redo** (the user plans to rebuild Cemu's input settings UI): put the emulated-remote speaker
+    output and the volume in the UI (today settings.xml only); possible extras: per-remote volume and left/right pan for
+    system audio (as in Dolphin), and applying the game's remote filter (`AXSetVoiceRmtIIR`) for a tinny remote sound.
+  - Verified with Wii Fit U + the fake bridge + the test tone: the game's own NintendoWare code turned the speaker on and
+    streamed through our WENC; the fake remote got the setup and 150 reports/s within bursts (longest gap 7.9 ms), decoded
+    440 Hz at 27 dB SNR; system audio played 99.8% of the samples; reconnect re-setup works. Not verified: a real remote,
+    a real game sound routed to the remotes (AX RMT voice mixing).
 - **Resolution overlay** (uncommitted until tested; `LatteOverlay.{h,cpp}`, `LatteRenderTarget.cpp`, `CemuConfig.*`,
   `GeneralSettings2.*`): Options -> General settings -> Overlay -> "Resolution". Per screen: the colour buffer the
   game passed to GX2CopyColorBufferToScanBuffer (size, format; "(pack WxH)" when a graphic pack scales it) -> the

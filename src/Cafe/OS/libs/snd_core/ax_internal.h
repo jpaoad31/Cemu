@@ -217,6 +217,9 @@ namespace snd_core
 	// AXAux
 	void AXAux_incrementBufferIndex();
 
+	// AXMix
+	sint32 AXVoiceMix_MergeInto(float* inputSamples, float* outputSamples, sint32 sampleCount, AXCHMIX_DEPR* mix, sint16 deltaI);
+
 	// internal mix buffers
 	extern SysAllocator<sint32, AX_SAMPLES_MAX * AX_TV_CHANNEL_COUNT> __AXTVOutputBuffer;
 	extern SysAllocator<sint32, AX_SAMPLES_MAX * AX_DRC_CHANNEL_COUNT * 2> __AXDRCOutputBuffer;

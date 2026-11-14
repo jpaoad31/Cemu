@@ -2,6 +2,7 @@
 
 #include "input/api/Controller.h"
 #include "input/api/Wiimote/WiimoteControllerProvider.h"
+#include "input/emulated/WiimoteSpeaker.h"
 
 // todo: find better name because of emulated nameclash
 class NativeWiimoteController : public Controller<WiimoteControllerProvider>
@@ -68,9 +69,22 @@ public:
 	uint32 get_packet_delay();
 	void set_packet_delay(uint32 delay);
 
+	// where the game's speaker sound goes (saved in the controller profile, default: this remote)
+	WiimoteSpeaker::Output get_speaker_output() const { return m_speaker_output; }
+	void set_speaker_output(WiimoteSpeaker::Output output) { m_speaker_output = output; }
+
+	uint32 get_connection_id() const { return m_provider->get_connection_id(m_index); }
+	void speaker_on(const WiimoteSpeakerCodec::Config& config) { m_provider->speaker_on(m_index, config); }
+	void speaker_off() { m_provider->speaker_off(m_index); }
+	void speaker_mute(bool mute) { m_provider->speaker_mute(m_index, mute); }
+	void speaker_play() { m_provider->speaker_play(m_index); }
+	bool speaker_can_send() { return m_provider->speaker_can_send(m_index); }
+	bool speaker_send(const uint8* data, size_t length) { return m_provider->speaker_send(m_index, data, length); }
+
 private:
 	size_t m_index;
 	size_t m_player_index = 0;
 	uint32 m_packet_delay = WiimoteControllerProvider::kDefaultPacketDelay;
+	std::atomic<WiimoteSpeaker::Output> m_speaker_output = WiimoteSpeaker::Output::Remote;
 };
 

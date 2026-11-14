@@ -444,6 +444,7 @@ add_library(CemuCafe
   OS/libs/ntag/ntag.h
   OS/libs/padscore/padscore.cpp
   OS/libs/padscore/padscore.h
+  OS/libs/padscore/padscore_speaker.cpp
   OS/libs/proc_ui/proc_ui.cpp
   OS/libs/proc_ui/proc_ui.h
   OS/libs/snd_core/ax_aux.cpp
@@ -454,6 +455,7 @@ add_library(CemuCafe
   OS/libs/snd_core/ax_mix.cpp
   OS/libs/snd_core/ax_multivoice.cpp
   OS/libs/snd_core/ax_out.cpp
+  OS/libs/snd_core/ax_rmt.cpp
   OS/libs/snd_core/ax_voice.cpp
   OS/libs/snd_user/snd_user.cpp
   OS/libs/snd_user/snd_user.h
