@@ -523,7 +523,7 @@ namespace snd_core
 			if (deviceIndex != 0 && deviceIndex != 1)
 				return -2;
 		}
-		else if (device == AX_DEV_TV)
+		else if (device == AX_DEV_RMT)
 		{
 			if (deviceIndex < 0 || deviceIndex >= 4)
 				return -2;
@@ -577,9 +577,12 @@ namespace snd_core
 		}
 		else if (device == AX_DEV_RMT)
 		{
-			assert_dbg();
-			channelCount = AX_RMT_CHANNEL_COUNT;
+			// Wii Remote speaker output isn't emulated: accept the mix and ignore it (voiceMix was
+			// left uninitialised here, which was unreachable while AXIsValidDevice rejected AX_DEV_RMT)
+			return 0;
 		}
+		else
+			return -1;
 		sint16 updatedMixMask[AX_BUS_COUNT];
 		for (sint32 i = 0; i < AX_BUS_COUNT; i++)
 		{
