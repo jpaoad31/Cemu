@@ -201,6 +201,13 @@ namespace
 				if (!received)
 					std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
+
+			// The socket was made on `io`, which is local to this function: close it here, while
+			// `io` still exists. Left to ~Session, the socket was destroyed after its io_context
+			// (crash when the bridge was turned off).
+			std::scoped_lock lock(m_send_mutex);
+			m_target_valid = false;
+			m_socket.reset();
 		}
 
 		void handle_message(const uint8* m, size_t len)
