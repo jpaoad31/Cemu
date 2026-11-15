@@ -14,7 +14,8 @@ for issues, not PRs): the Wiimote GUI code compiled out since the wxWidgets spli
 not resizable / not growing with its panel (a1e935b), XMLConfigParser ignoring 8/16-bit integers so the DSU port never
 loads (9aee914), Wii Remotes swapping indices when they reconnect in a different order (b1ef6f4). Found during the
 Wii Remote speaker work: AXIsValidDevice checking AX_DEV_TV twice, so the Wii Remote device was always rejected (855d224). From testing a real Wii Remote: Input settings crashing when a page had shown a Wii Remote panel
-before (hidden panels of another type refreshed with the current controller, 9a49cbe).
+before (hidden panels of another type refreshed with the current controller, 9a49cbe). The Wiimote reader and writer threads racing on a
+device pointer when a device drops out (9ea9be7).
 
 - **`SYSTEM_LIBS` memory range** (0x01000000-0x017FFFFF, readable). Wii Fit U reads past its
   two-entry pointing-device table (`jet::ui::UICore::Read`) into 0x011004xx. That range is mapped
