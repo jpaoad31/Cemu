@@ -120,7 +120,14 @@ private:
 		Wiimote(WiimoteDevicePtr device)
 			: device(std::move(device)) {}
 
-		WiimoteDevicePtr device;
+		// The reader and writer threads use the device while holding m_device_mutex only shared,
+		// and either one drops it when it's gone: take a copy with get_device() (it stays valid
+		// while in use) and drop it with drop_device(), never touch `device` directly there.
+		// (Reading it while the other thread reset it crashed when a device disconnected mid-game.)
+		WiimoteDevicePtr get_device() const { std::scoped_lock lock(device_mutex); return device; }
+		void drop_device() { std::scoped_lock lock(device_mutex); device.reset(); }
+		WiimoteDevicePtr device;   // under device_mutex, or m_device_mutex held exclusively
+		mutable std::mutex device_mutex;
 		uint32 connection_id = 0; // unique per connection (see get_connection_id)
 		std::atomic_bool rumble = false;
 

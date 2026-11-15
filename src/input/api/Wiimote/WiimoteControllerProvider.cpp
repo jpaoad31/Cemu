@@ -140,13 +140,13 @@ std::vector<std::shared_ptr<ControllerBase>> WiimoteControllerProvider::get_cont
 bool WiimoteControllerProvider::is_connected(size_t index)
 {
 	std::shared_lock lock(m_device_mutex);
-	return index < m_wiimotes.size() && m_wiimotes[index].device;
+	return index < m_wiimotes.size() && m_wiimotes[index].get_device();
 }
 
 uint32 WiimoteControllerProvider::get_connection_id(size_t index)
 {
 	std::shared_lock lock(m_device_mutex);
-	return index < m_wiimotes.size() && m_wiimotes[index].device ? m_wiimotes[index].connection_id : 0;
+	return index < m_wiimotes.size() && m_wiimotes[index].get_device() ? m_wiimotes[index].connection_id : 0;
 }
 
 bool WiimoteControllerProvider::is_registered_device(size_t index)
@@ -335,13 +335,14 @@ void WiimoteControllerProvider::reader_thread()
 		for (size_t index = 0; index < m_wiimotes.size(); ++index)
 		{
 			auto& wiimote = m_wiimotes[index];
-			if (!wiimote.device)
+			const auto device = wiimote.get_device();
+			if (!device)
 				continue;
 
-			const auto read_data = wiimote.device->read_data();
+			const auto read_data = device->read_data();
 			if (!read_data)
 			{
-				wiimote.device.reset();
+				wiimote.drop_device();
 				continue;
 			}
 			if (read_data->empty())
@@ -1222,13 +1223,14 @@ void WiimoteControllerProvider::writer_thread()
 		if (index != (size_t)-1 && !data.empty())
 		{
 			auto& wiimote = m_wiimotes[index];
-			if (!wiimote.device)
+			const auto device = wiimote.get_device();
+			if (!device)
 				continue;
 			if (wiimote.rumble)
 				data[1] |= 1;
-			if (!wiimote.device->write_data(data))
+			if (!device->write_data(data))
 			{
-				wiimote.device.reset();
+				wiimote.drop_device();
 				wiimote.rumble = false;
 			}
 			else
@@ -1268,12 +1270,15 @@ void WiimoteControllerProvider::writer_send_speaker_reports(std::vector<DueSpeak
 {
 	for (auto& report : due)
 	{
-		if (report.index >= m_wiimotes.size() || !m_wiimotes[report.index].device)
+		if (report.index >= m_wiimotes.size())
 			continue;
 		auto& wiimote = m_wiimotes[report.index];
+		const auto device = wiimote.get_device();
+		if (!device)
+			continue;
 		if (wiimote.rumble)
 			report.data[1] |= 1;
-		if (!wiimote.device->write_data(report.data) || !report.stream)
+		if (!device->write_data(report.data) || !report.stream)
 			continue; // a dead device is noticed by the reader
 
 		std::unique_lock lock(m_writer_mutex);
