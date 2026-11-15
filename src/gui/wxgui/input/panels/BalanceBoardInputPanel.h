@@ -56,16 +56,6 @@ private:
 
 #ifdef SUPPORTS_WIIMOTE
 	// Wii BT Bridge (UDP): a Pico W / Pi that connects real Wii devices for Cemu
-	void on_bridge_settings_changed(wxCommandEvent& event);
-	void on_bridge_scan(wxCommandEvent& event);
-	void on_bridge_stop(wxCommandEvent& event);
-	void on_bridge_timer(wxTimerEvent& event);
-	wxCheckBox* m_bridge_enabled = nullptr;
-	wxTextCtrl* m_bridge_address = nullptr;
-	wxButton* m_bridge_scan = nullptr;
-	wxButton* m_bridge_stop = nullptr;
-	wxStaticText* m_bridge_status = nullptr;
-	wxTimer* m_bridge_timer = nullptr;
 #endif
 
 	std::weak_ptr<BalanceBoardController> m_board;

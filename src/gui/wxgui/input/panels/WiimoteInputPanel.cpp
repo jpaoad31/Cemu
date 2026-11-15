@@ -12,6 +12,9 @@
 #include "input/emulated/WiimoteController.h"
 #include "wxgui/helpers/wxHelpers.h"
 #include "wxgui/components/wxInputDraw.h"
+#ifdef SUPPORTS_WIIMOTE
+#include "wxgui/input/panels/WiiBridgePanel.h"
+#endif
 
 constexpr WiimoteController::ButtonId g_kFirstColumnItems[] =
 {
@@ -59,6 +62,11 @@ WiimoteInputPanel::WiimoteInputPanel(wxWindow* parent)
 	extensions_sizer->Add(m_classic);
 
 	main_sizer->Add(horiz_main_sizer, 0, wxEXPAND | wxALL, 5);
+#ifdef SUPPORTS_WIIMOTE
+	// the Wii BT Bridge settings (shared with the Balance Board panel): real Wii Remotes on systems
+	// that can't pair them (macOS)
+	main_sizer->Add(new WiiBridgePanel(this), 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 5);
+#endif
 	main_sizer->Add(new wxStaticLine(this), 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, 5);
 
 	m_item_sizer = new wxGridBagSizer();

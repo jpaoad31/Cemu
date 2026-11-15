@@ -86,6 +86,8 @@ add_library(CemuWxGui STATIC
   input/panels/WiimoteInputPanel.h
   input/panels/BalanceBoardInputPanel.cpp
   input/panels/BalanceBoardInputPanel.h
+  input/panels/WiiBridgePanel.cpp
+  input/panels/WiiBridgePanel.h
   input/settings/DefaultControllerSettings.cpp
   input/settings/DefaultControllerSettings.h
   input/settings/WiimoteControllerSettings.cpp
