@@ -428,19 +428,32 @@ void InputSettings2::update_state()
 					page_data.m_controllers->SetStringSelection(controller_selection);
 				else
 				{
-					// on opening: show a Remote GamePad if there is one. It has taken over the GamePad's
-					// buttons, so the first entry (often the keyboard, with nothing mapped) looked as if
-					// the Remote GamePad hadn't been saved
-					int i = 0;
+					// On opening, show the device the player actually uses rather than the first entry
+					// (often the keyboard, which made it look as if a real controller had been
+					// dropped): a Remote GamePad (it takes over the GamePad's buttons), then a real
+					// Wii Remote / Balance Board, then any other controller, the keyboard last. All
+					// of them stay active; the box only picks which one the mappings show.
+					const auto rank = [](InputAPI::Type api) {
+						switch (api)
+						{
+						case InputAPI::RemoteGamePad: return 0;
+						case InputAPI::Wiimote: return 1;
+						case InputAPI::Keyboard: return 3;
+						default: return 2;
+						}
+					};
+					int i = 0, best = -1, best_rank = 99;
 					for (const auto& c : emulated_controller->get_controllers())
 					{
-						if (c->api() == InputAPI::RemoteGamePad)
+						if (const int r = rank(c->api()); r < best_rank)
 						{
-							page_data.m_controllers->SetSelection(i);
-							break;
+							best = i;
+							best_rank = r;
 						}
 						++i;
 					}
+					if (best >= 0)
+						page_data.m_controllers->SetSelection(best);
 				}
 			}
 		}
