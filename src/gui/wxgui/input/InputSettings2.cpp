@@ -487,12 +487,11 @@ void InputSettings2::update_state()
 	// enabled correct panel for active controller
 	if (active_api && emulated_controller && emulated_controller->type() == active_api.value())
 	{
-		// same controller type panel already shown, refresh content of panels
-		for (auto* panel : page_data.m_panels)
-		{
-			if (panel)
-				panel->load_controller(page_data.m_controller);
-		}
+		// same controller type panel already shown, refresh its content. Only that one: the page
+		// keeps hidden panels of other controller types it showed before, and those expect their
+		// own type (WiimoteInputPanel::load_controller dereferenced a failed cast). A hidden panel
+		// is loaded again below when it's shown.
+		page_data.m_panels[active_api.value()]->load_controller(page_data.m_controller);
 		return;
 	}
 
