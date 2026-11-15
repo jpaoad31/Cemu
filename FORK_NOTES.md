@@ -13,7 +13,8 @@ General upstream bugs found during the Wii BT Bridge work, one commit each (refe
 for issues, not PRs): the Wiimote GUI code compiled out since the wxWidgets split (73a7ed8), the Input settings window
 not resizable / not growing with its panel (a1e935b), XMLConfigParser ignoring 8/16-bit integers so the DSU port never
 loads (9aee914), Wii Remotes swapping indices when they reconnect in a different order (b1ef6f4). Found during the
-Wii Remote speaker work: AXIsValidDevice checking AX_DEV_TV twice, so the Wii Remote device was always rejected (855d224).
+Wii Remote speaker work: AXIsValidDevice checking AX_DEV_TV twice, so the Wii Remote device was always rejected (855d224). From testing a real Wii Remote: Input settings crashing when a page had shown a Wii Remote panel
+before (hidden panels of another type refreshed with the current controller, 9a49cbe).
 
 - **`SYSTEM_LIBS` memory range** (0x01000000-0x017FFFFF, readable). Wii Fit U reads past its
   two-entry pointing-device table (`jet::ui::UICore::Read`) into 0x011004xx. That range is mapped
@@ -164,6 +165,17 @@ Wii Remote speaker work: AXIsValidDevice checking AX_DEV_TV twice, so the Wii Re
   - **For the input settings redo** (the user plans to rebuild Cemu's input settings UI): put the emulated-remote speaker
     output and the volume in the UI (today settings.xml only); possible extras: per-remote volume and left/right pan for
     system audio (as in Dolphin), and applying the game's remote filter (`AXSetVoiceRmtIIR`) for a tinny remote sound.
+  - **Input settings rework, general findings** (2026-11-15, from testing a real Wii Remote through the bridge):
+    - The "Controller" box looks like a setting but only picks which attached device new bindings come from (and which
+      one Settings opens); it showed the first device on opening (now: the real device before the keyboard, a stopgap).
+    - Mappings are one table per player (`EmulatedController::m_mappings`: each emulated button -> one controller's
+      button), not per device, so several attached devices don't each have a mapping; the UI suggests they do.
+    - Real Wii devices (Wiimote API: Wii Remotes, Balance Board) and the Remote GamePad are the real controller: they
+      should get a fixed 1:1 mapping and no mapping UI, only device options (rumble, speaker output and volume,
+      extensions, the bridge). The speaker choice lives in the per-controller Settings dialog, which is only enabled
+      while that device is selected in the box: hard to find.
+    - The bridge settings are global but were only on the Balance Board panel; now a shared panel on both (Wii Remote
+      and Balance Board), which a rework could make a global "Wii devices" section.
   - Verified with Wii Fit U + the fake bridge + the test tone: the game's own NintendoWare code turned the speaker on and
     streamed through our WENC; the fake remote got the setup and 150 reports/s within bursts (longest gap 7.9 ms), decoded
     440 Hz at 27 dB SNR; system audio played 99.8% of the samples; reconnect re-setup works. Not verified: a real remote,
