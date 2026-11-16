@@ -213,6 +213,17 @@ device pointer when a device drops out (9ea9be7).
   WORD0/WORD1/WORD2 + Metal border colour. New samplers using HALF_BORDER / MIRROR_ONCE_HALF_BORDER /
   MIRROR_ONCE_BORDER (approximated as on Vulkan) are logged under the TextureCache log type. Upstream has the same bug.
 
+- **Input bindings and settings rework** (branch `input-rework`, committed, not yet tested by hand; see
+  `INPUT_REWORK.md`): Dolphin-style bindings, each emulated control maps to an expression over all of its
+  devices (`Keyboard X | RemoteGamePad A`), so adding a device no longer steals buttons (the Remote GamePad
+  takeover hack is gone). Profiles get `<bindings>`; old `<mappings>` still read and still written for older
+  builds. Device list with state per controller tab, conflict warnings, Balance Board source line with a
+  fallback to the emulated board when the assigned device is a Wii Remote or not connected (the Wii Fit U
+  white-screen case). Binding fields with live state, Detect on any device (char hook + key-state snapshot,
+  fixes stuck-key capture on macOS), Shift-click adds, right-click menu, Advanced expression editor, motion
+  and touch indicators, remembered window size/position. macOS keys get names (were `key_N`).
+  Test hooks `CEMU_TEST_INPUT_SETTINGS[_PAGE|_SHOT]`.
+
 ## Upstream (Cemu's AI policy)
 
 Cemu's CONTRIBUTING.md (checked 2026-10-22): code from new contributors must be written and understood by a
@@ -253,8 +264,7 @@ publishing.
   (linear textures in place). Readbacks would get cheap enough to do whenever the game may look, which removes the
   stale-RAM class of bugs (like the Mii icon alpha pass) instead of fixing each case. Big: memory mapping, the Metal
   backend, the texture cache. After the Fit Meter.
-- **An input expression editor** like Dolphin's: mouse axes, combined inputs, `timer()` and so on.
-  Cemu only maps keys, buttons and sticks; the mouse is wired to GamePad touch and gyro.
+- ~~**An input expression editor** like Dolphin's~~: done on `input-rework` (no mouse axes yet).
 - **Upstream:** the `SYSTEM_LIBS` range is a general fix (Cemu has a precedent in HIGHMEM for
   Project Zero). Check Cemu's contribution rules on AI-written code before offering it.
 - Further quality-of-life items and bug fixes as the decomp turns them up.
