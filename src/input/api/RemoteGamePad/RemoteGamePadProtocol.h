@@ -249,7 +249,9 @@ namespace RemoteGamePad
 			if (pressed)
 			{
 				m_view.buttons |= pressed;
-				m_button_time = now_us;
+				for (int i = 0; i < kButtonCount; ++i)
+					if (pressed & (1u << i))
+						m_button_time[i] = now_us; // per button: a newer press of another button must not keep this one latched
 			}
 			if (touch_pressed)
 			{
@@ -265,8 +267,9 @@ namespace RemoteGamePad
 		View Get(uint64_t now_us) const
 		{
 			View v = m_view;
-			if (now_us - m_button_time > kExpiryUs)
-				v.buttons = 0;
+			for (int i = 0; i < kButtonCount; ++i)
+				if (now_us - m_button_time[i] > kExpiryUs)
+					v.buttons &= ~(1u << i);
 			if (now_us - m_touch_time > kExpiryUs)
 				v.touch = false;
 			return v;
@@ -289,7 +292,8 @@ namespace RemoteGamePad
 
 	private:
 		View m_view{};
-		uint64_t m_button_time = 0, m_touch_time = 0;
+		std::array<uint64_t, kButtonCount> m_button_time{};
+		uint64_t m_touch_time = 0;
 		bool m_have_counts = false;
 		std::array<uint8_t, kButtonCount> m_counts{};
 		uint8_t m_touch_count = 0;

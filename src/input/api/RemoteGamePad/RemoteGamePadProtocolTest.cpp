@@ -295,6 +295,18 @@ int main()
 			CHECK(l.Get(1000 + 100000).buttons == kBtnA);
 			CHECK(l.Get(1000 + PressLatch::kExpiryUs + 1).buttons == 0);
 		}
+		// nobody reads: each button expires on its own clock (pressing B must not keep A latched)
+		{
+			PressLatch l;
+			Input none, a, b;
+			a.buttons = kBtnA;
+			b.buttons = kBtnB;
+			l.OnInput(none, true, a, 1000);                        // A pressed
+			l.OnInput(a, true, none, 2000);                        // A released
+			l.OnInput(none, true, b, 1000 + 200000);               // B pressed 200 ms later
+			CHECK(l.Get(1000 + 200000).buttons == (kBtnA | kBtnB));
+			CHECK(l.Get(1000 + PressLatch::kExpiryUs + 1).buttons == kBtnB); // A gone, B still latched
+		}
 		// a touch-down after the read sampled the latch survives that read's consume
 		{
 			PressLatch l;
