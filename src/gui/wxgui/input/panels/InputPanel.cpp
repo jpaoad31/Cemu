@@ -1,285 +1,235 @@
 #include "wxgui/input/panels/InputPanel.h"
 
-#include <wx/textctrl.h>
+#include <wx/menu.h>
+#include <wx/sizer.h>
+#include <wx/statbox.h>
+#include <wx/stattext.h>
 #include <wx/wupdlock.h>
 
 #include "wxgui/helpers/wxHelpers.h"
+#include "wxgui/input/InputDetector.h"
+#include "wxgui/input/ExpressionDialog.h"
 
 InputPanel::InputPanel(wxWindow* parent)
-	: wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxNO_BORDER | wxWANTS_CHARS)
+	: wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxNO_BORDER)
 {
-	Bind(wxEVT_LEFT_UP, &InputPanel::on_left_click, this);
 }
 
-void InputPanel::on_timer(const EmulatedControllerPtr& emulated_controller, const ControllerPtr& controller)
+InputPanel::~InputPanel()
 {
-	const auto& state = controller->update_state();
-
-	if(m_focused_element == wxID_NONE)
+	if (auto* detector = InputDetector::Get())
 	{
+		for (auto* c : m_controls)
+			detector->forget_control(c);
+	}
+}
+
+MappingControl* InputPanel::create_mapping_control(wxWindow* parent, uint64 mapping, const wxString& label, bool analogue)
+{
+	auto* control = new MappingControl(parent, mapping, analogue);
+	control->set_action_handler([this](MappingControl* c, MappingControl::Action a) { on_mapping_action(c, a); });
+	m_controls.emplace_back(control);
+	if (!label.empty())
+		m_labels[mapping] = label;
+	return control;
+}
+
+wxStaticBoxSizer* InputPanel::create_group(wxWindow* parent, const wxString& title, const std::vector<std::pair<uint64, wxString>>& rows, bool analogue, wxFlexGridSizer** grid_out)
+{
+	auto* box = new wxStaticBoxSizer(wxVERTICAL, parent, title);
+	auto* grid = new wxFlexGridSizer(2, FromDIP(4), FromDIP(6));
+	grid->AddGrowableCol(1, 1);
+	for (const auto& [id, label] : rows)
+	{
+		grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL);
+		grid->Add(create_mapping_control(box->GetStaticBox(), id, label, analogue), 1, wxEXPAND);
+	}
+	box->Add(grid, 0, wxEXPAND | wxALL, FromDIP(4));
+	if (grid_out)
+		*grid_out = grid;
+	return box;
+}
+
+void InputPanel::on_timer(const EmulatedControllerPtr& emulated_controller, const ControllerPtr&)
+{
+	if (!emulated_controller)
 		return;
-	}
-
-	const auto element = dynamic_cast<wxTextCtrl*>(FindWindow(m_focused_element));
-	wxASSERT(element);
-
-	const auto mapping = reinterpret_cast<uint64>(element->GetClientData());
-
-	// reset mapping
-	if(std::exchange(m_right_down, false) || WindowSystem::IsKeyDown(WindowSystem::PlatformKeyCodes::ESCAPE))
+	for (auto* control : m_controls)
 	{
-		element->SetBackgroundColour(kKeyColourNormalMode);
-		m_color_backup[element->GetId()] = kKeyColourNormalMode;
-
-		emulated_controller->delete_mapping(mapping);
-		if(element->IsEmpty())
-			reset_focused_element();
-		else
-			element->SetValue(wxEmptyString);
-
-		return;
-	}
-
-	static bool s_was_idle = true;
-	if (state.buttons.IsIdle()) 
-	{
-		s_was_idle = true;
-		return;
-	}
-
-	if (!s_was_idle) 
-	{
-		return;
-	}
-	s_was_idle = false;
-	for(const auto& id : state.buttons.GetButtonList())
-	{
-		if (controller->has_axis())
-		{
-			// test if one axis direction is pressed more than the other
-			if ((id == kAxisXP || id == kAxisXN) && (state.buttons.GetButtonState(kAxisYP) || state.buttons.GetButtonState(kAxisYN)))
-			{
-				if (std::abs(state.axis.y) > std::abs(state.axis.x))
-					continue;
-			}
-			else if ((id == kAxisYP || id == kAxisYN) && (state.buttons.GetButtonState(kAxisXP) || state.buttons.GetButtonState(kAxisXN)))
-			{
-				if (std::abs(state.axis.x) > std::abs(state.axis.y))
-					continue;
-			}
-			else if ((id == kRotationXP || id == kRotationXN) && (state.buttons.GetButtonState(kRotationYP) || state.buttons.GetButtonState(kRotationYN)))
-			{
-				if (std::abs(state.rotation.y) > std::abs(state.rotation.x))
-					continue;
-			}
-			else if ((id == kRotationYP || id == kRotationYN) && (state.buttons.GetButtonState(kRotationXP) || state.buttons.GetButtonState(kRotationXN)))
-			{
-				if (std::abs(state.rotation.x) > std::abs(state.rotation.y))
-					continue;
-			}
-			else if ((id == kTriggerXP || id == kTriggerXN) && (state.buttons.GetButtonState(kTriggerYP) || state.buttons.GetButtonState(kTriggerYN)))
-			{
-				if (std::abs(state.trigger.y) > std::abs(state.trigger.x))
-					continue;
-			}
-			else if ((id == kTriggerYP || id == kTriggerYN) && (state.buttons.GetButtonState(kTriggerXP) || state.buttons.GetButtonState(kTriggerXN)))
-			{
-				if (std::abs(state.trigger.x) > std::abs(state.trigger.y))
-					continue;
-			}
-
-			// ignore too low button values on configuration
-			if (id >= kButtonAxisStart)
-			{
-				if (controller->get_axis_value(id) < 0.33f) {
-					cemuLog_logDebug(LogType::Force, "skipping since value too low {}", controller->get_axis_value(id));
-					s_was_idle = true;
-					return;
-				}
-			}
-		}
-
-		emulated_controller->set_mapping(mapping, controller, id);
-		element->SetValue(controller->get_button_name(id));
-		element->SetBackgroundColour(kKeyColourNormalMode);
-		m_color_backup[element->GetId()] = kKeyColourNormalMode;
-		break;
-	}
-
-	if (const auto sibling = get_next_sibling(element))
-		sibling->SetFocus();
-	else // last element reached 
-	{
-		reset_focused_element();
-		this->SetFocusIgnoringChildren();
+		if (!control->IsShownOnScreen())
+			continue;
+		const auto id = control->mapping();
+		control->set_live(emulated_controller->get_mapping_value(id), emulated_controller->is_mapping_down(id));
 	}
 }
 
 void InputPanel::reset_configuration()
 {
-	m_color_backup.clear();
-
 	wxWindowUpdateLocker lock(this);
-	for (const auto& c : GetChildren())
+	for (auto* control : m_controls)
 	{
-		if (auto* text = dynamic_cast<wxTextCtrl*>(c))
-		{
-			text->SetValue(wxEmptyString);
-			text->SetBackgroundColour(kKeyColourNormalMode);
-			text->Refresh();
-		}
+		control->set_binding({}, {}, {});
+		control->set_live(0, false);
 	}
 }
-
-void InputPanel::reset_colours()
-{
-	m_color_backup.clear();
-
-	wxWindowUpdateLocker lock(this);
-	for (const auto& c : GetChildren())
-	{
-		if (auto* text = dynamic_cast<wxTextCtrl*>(c))
-		{
-			text->SetBackgroundColour(kKeyColourNormalMode);
-			text->Refresh();
-		}
-	}
-}
-
 
 void InputPanel::load_controller(const EmulatedControllerPtr& controller)
 {
-	reset_configuration();
-	if(!controller)
+	m_controller = controller;
+	refresh_bindings();
+}
+
+void InputPanel::refresh_bindings()
+{
+	if (!m_controller)
 	{
+		reset_configuration();
 		return;
 	}
-
-	if(controller->get_controllers().empty())
-	{
-		return;
-	}
-
 	wxWindowUpdateLocker lock(this);
-	for (auto* child : this->GetChildren())
+	for (auto* control : m_controls)
 	{
-		const auto text = dynamic_cast<wxTextCtrl*>(child);
-		if (text == nullptr)
-			continue;
-
-
-		const auto mapping = reinterpret_cast<sint64>(text->GetClientData());
-		if (mapping <= 0)
-			continue;
-
-		auto button_name = controller->get_mapping_name(mapping);
-		text->ChangeValue(button_name);
+		const auto id = control->mapping();
+		const auto warnings = m_controller->get_mapping_warnings(id);
+		control->set_binding(wxString::FromUTF8(m_controller->get_mapping_name(id)),
+			wxString::FromUTF8(m_controller->get_mapping_expression(id)),
+			wxString::FromUTF8(fmt::format("{}", fmt::join(warnings, "\n"))));
 	}
 }
 
-void InputPanel::set_selected_controller(const EmulatedControllerPtr& emulated_controller, const ControllerPtr& controller)
+void InputPanel::report(const wxString& text, bool error)
 {
-	wxWindowUpdateLocker lock(this);
-	for (auto* child : this->GetChildren())
+	if (m_status_handler)
+		m_status_handler(text, error);
+}
+
+void InputPanel::on_mapping_action(MappingControl* control, MappingControl::Action action)
+{
+	if (!m_controller)
 	{
-		const auto text = dynamic_cast<wxTextCtrl*>(child);
-		if (text == nullptr)
-			continue;
-
-		if (text->GetId() == m_focused_element)
-			continue;
-
-		const auto mapping = reinterpret_cast<sint64>(text->GetClientData());
-		if (mapping <= 0)
-			continue;
-
-		const auto mapping_controller = emulated_controller->get_mapping_controller(mapping);
-		if (!mapping_controller)
-			continue;
-
-		text->SetBackgroundColour(*mapping_controller == *controller ? kKeyColourNormalMode : kKeyColourActiveMode);
-		text->Refresh();
-	}
-}
-
-void InputPanel::bind_hotkey_events(wxTextCtrl* text_ctrl)
-{
-	text_ctrl->Bind(wxEVT_SET_FOCUS, &InputPanel::on_edit_key_focus, this);
-	text_ctrl->Bind(wxEVT_KILL_FOCUS, &InputPanel::on_edit_key_kill_focus, this);
-	text_ctrl->Bind(wxEVT_RIGHT_DOWN, &InputPanel::on_right_click, this);
-#if BOOST_OS_LINUX
-	// Bind to a no-op lambda to disable arrow keys navigation
-	text_ctrl->Bind(wxEVT_KEY_DOWN, [](wxKeyEvent &) {});
-#endif
-}
-
-void InputPanel::on_left_click(wxMouseEvent& event)
-{
-	if (m_focused_element == wxID_NONE)
+		report(_("Choose an emulated controller first."), true);
 		return;
-
-	const auto focuses_element = FindWindow(m_focused_element);
-	wxASSERT(focuses_element);
-
-	wxFocusEvent focus(wxEVT_KILL_FOCUS, m_focused_element);
-	focus.SetWindow(focuses_element);
-	focuses_element->GetEventHandler()->ProcessEvent(focus);
-
-	this->SetFocusIgnoringChildren();
-}
-
-void InputPanel::on_edit_key_focus(wxFocusEvent& event)
-{
-	auto* text = dynamic_cast<wxTextCtrl*>(event.GetEventObject());
-	wxASSERT(text);
-
-	m_color_backup[text->GetId()] = text->GetBackgroundColour();
-
-	text->SetBackgroundColour(kKeyColourEditMode);
-	#if BOOST_OS_WINDOWS
-	text->HideNativeCaret();
-	#endif
-	text->Refresh();
-
-	m_focused_element = text->GetId();
-	event.Skip();
-}
-
-void InputPanel::on_edit_key_kill_focus(wxFocusEvent& event)
-{
-	reset_focused_element();
-	event.Skip();
-}
-
-void InputPanel::on_right_click(wxMouseEvent& event)
-{
-	m_right_down = true;
-	if(m_focused_element == wxID_NONE)
+	}
+	auto* detector = InputDetector::Get();
+	switch (action)
 	{
-		auto* text = dynamic_cast<wxTextCtrl*>(event.GetEventObject());
-		wxASSERT(text);
-		text->SetFocus();
+	case MappingControl::Action::Detect:
+	case MappingControl::Action::DetectAppend:
+	{
+		if (!detector)
+			return;
+		// a second click on the field that is waiting cancels
+		if (detector->is_active() && detector->control() == control)
+		{
+			detector->cancel(_("Detection cancelled.").utf8_string());
+			return;
+		}
+		const bool append = action == MappingControl::Action::DetectAppend;
+		const wxString label = m_labels.contains(control->mapping()) ? m_labels[control->mapping()] : wxString();
+		report(append ? wxString::Format(_("%s: press an input on any device to add it (3 s, Esc cancels)"), label)
+			: wxString::Format(_("%s: press an input on any device (3 s, Esc cancels; Shift-click adds instead of replacing)"), label));
+		detector->start(m_controller, control->mapping(), append, control, [this, label](const InputDetector::Result& result) {
+			refresh_bindings();
+			if (result.device_added && m_devices_changed_handler)
+				m_devices_changed_handler();
+			if (result.detected)
+				report(wxString::Format(_("%s: %s"), label, wxString::FromUTF8(result.message)));
+			else
+				report(wxString::FromUTF8(result.message), !result.message.empty());
+		});
+		break;
+	}
+	case MappingControl::Action::Menu:
+		if (detector && detector->is_active())
+			detector->cancel();
+		show_menu(control);
+		break;
 	}
 }
 
-bool InputPanel::reset_focused_element()
+void InputPanel::show_menu(MappingControl* control)
 {
-	if (m_focused_element == wxID_NONE)
-		return false;
+	const auto id = control->mapping();
+	const auto expr = m_controller->parse_expression(m_controller->get_mapping_expression(id));
+	const auto leaves = expr.leaves();
+	const auto& devices = m_controller->get_controllers();
 
-	auto* prev_element = dynamic_cast<wxTextCtrl*>(FindWindow(m_focused_element));
-	wxASSERT(prev_element);
+	wxMenu menu;
+	enum
+	{
+		kDetect = 1,
+		kDetectAppend,
+		kClear,
+		kAdvanced,
+		kRemoveFirst = 100,
+	};
+	menu.Append(kDetect, _("Detect (replace)"));
+	menu.Append(kDetectAppend, _("Detect and add\tShift-click"));
+	menu.AppendSeparator();
+	if (expr.is_list() && leaves.size() > 1)
+	{
+		for (size_t i = 0; i < leaves.size(); ++i)
+		{
+			const auto& l = leaves[i];
+			std::string name = l.input_text;
+			if (l.device < devices.size() && l.input)
+				name = fmt::format("{} [{}]", devices[l.device]->get_button_name(*l.input), devices[l.device]->display_name());
+			else
+				name += fmt::format(" [{}]", l.device_text);
+			menu.Append(kRemoveFirst + (int)i, wxString::Format(_("Remove %s"), wxString::FromUTF8(name)));
+		}
+	}
+	menu.Append(kClear, _("Clear"));
+	menu.Enable(kClear, !expr.empty());
+	menu.AppendSeparator();
+	menu.Append(kAdvanced, _("Advanced..."));
 
-	if(m_color_backup.find(prev_element->GetId()) != m_color_backup.cend())
-		prev_element->SetBackgroundColour(m_color_backup[prev_element->GetId()]);
-	else
-		prev_element->SetBackgroundColour(kKeyColourNormalMode);
+	const int choice = control->GetPopupMenuSelectionFromUser(menu);
+	switch (choice)
+	{
+	case kDetect:
+		on_mapping_action(control, MappingControl::Action::Detect);
+		return;
+	case kDetectAppend:
+		on_mapping_action(control, MappingControl::Action::DetectAppend);
+		return;
+	case kClear:
+		m_controller->delete_mapping(id);
+		break;
+	case kAdvanced:
+		open_advanced(control);
+		return;
+	default:
+		if (choice >= kRemoveFirst && choice < kRemoveFirst + (int)leaves.size())
+		{
+			std::vector<std::string> kept;
+			for (size_t i = 0; i < leaves.size(); ++i)
+			{
+				if ((int)i != choice - kRemoveFirst)
+					kept.emplace_back(InputExpr::quote_input(leaves[i].device_text, leaves[i].input_text));
+			}
+			m_controller->set_mapping_expression(id, fmt::format("{}", fmt::join(kept, " | ")));
+		}
+		else
+			return;
+	}
+	refresh_bindings();
+}
 
-#if BOOST_OS_WINDOWS
-	prev_element->HideNativeCaret();
-#endif
-	prev_element->Refresh();
-	
-	m_focused_element = wxID_NONE;
-	return true;
+void InputPanel::open_advanced(MappingControl* control)
+{
+	const auto id = control->mapping();
+	const wxString label = m_labels.contains(id) ? m_labels[id] : wxString::Format("%llu", (unsigned long long)id);
+	const size_t device_count = m_controller->get_controllers().size();
+	ExpressionDialog dialog(wxGetTopLevelParent(this), m_controller, id, label);
+	if (dialog.ShowModal() == wxID_OK)
+	{
+		if (const auto error = m_controller->set_mapping_expression(id, dialog.get_expression()))
+			report(wxString::FromUTF8(*error), true);
+		else
+			report(wxString::Format(_("%s: binding changed."), label));
+	}
+	refresh_bindings();
+	if (m_controller->get_controllers().size() != device_count && m_devices_changed_handler)
+		m_devices_changed_handler();
 }

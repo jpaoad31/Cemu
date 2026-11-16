@@ -135,12 +135,7 @@ WiimoteInputPanel::WiimoteInputPanel(wxWindow* parent)
 			wxDefaultSpan,
 			wxALL | wxALIGN_CENTER_VERTICAL, 5);
 
-		auto* text_ctrl = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxTE_PROCESS_ENTER | wxTE_PROCESS_TAB);
-		text_ctrl->SetClientData((void*)id);
-		text_ctrl->SetMinSize(wxSize(150, -1));
-		text_ctrl->SetEditable(false);
-		text_ctrl->SetBackgroundColour(kKeyColourNormalMode);
-		bind_hotkey_events(text_ctrl);
+		auto* text_ctrl = create_mapping_control(this, id, wxGetTranslation(wxString::FromUTF8(WiimoteController::get_button_name(id))), id >= WiimoteController::kButtonId_Nunchuck_Up);
 		text_ctrl->Enable(m_nunchuck->GetValue());
 		m_item_sizer->Add(text_ctrl, wxGBPosition(row, column + 1), wxDefaultSpan, wxALL | wxEXPAND, 5);
 
@@ -171,12 +166,7 @@ void WiimoteInputPanel::add_button_row(sint32 row, sint32 column, const WiimoteC
 		wxDefaultSpan,
 		wxALL | wxALIGN_CENTER_VERTICAL, 5);
 
-	auto* text_ctrl = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxTE_PROCESS_ENTER | wxTE_PROCESS_TAB);
-	text_ctrl->SetClientData((void*)button_id);
-	text_ctrl->SetMinSize(wxSize(150, -1));
-	text_ctrl->SetEditable(false);
-	text_ctrl->SetBackgroundColour(kKeyColourNormalMode);
-	bind_hotkey_events(text_ctrl);
+	auto* text_ctrl = create_mapping_control(this, button_id, wxGetTranslation(wxString::FromUTF8(WiimoteController::get_button_name(button_id))));
 	m_item_sizer->Add(text_ctrl, wxGBPosition(row, column + 1), wxDefaultSpan, wxALL | wxEXPAND, 5);
 }
 

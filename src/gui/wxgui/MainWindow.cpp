@@ -371,6 +371,32 @@ MainWindow::MainWindow()
 
 	LoadSettings();
 
+	// test hook: CEMU_TEST_INPUT_SETTINGS=SECONDS opens Options > Input settings at startup, closes
+	// it after SECONDS (which saves the controller profiles) and quits. CEMU_TEST_INPUT_SETTINGS_PAGE
+	// picks the tab (0-based). For scripted checks of the input settings with a portable profile.
+	if (const char* test_input = getenv("CEMU_TEST_INPUT_SETTINGS"))
+	{
+		const int seconds = std::max(1, atoi(test_input));
+		CallAfter([this, seconds] {
+			auto* frame = new InputSettings2(this);
+			auto* timer = new wxTimer(frame);
+			frame->Bind(wxEVT_TIMER, [frame](wxTimerEvent&) {
+#if BOOST_OS_MACOS
+				// CEMU_TEST_INPUT_SETTINGS_SHOT=file.png: a picture of the window before it closes
+				extern bool MacSnapshotView(void* handle, const char* path);
+				if (const char* shot = getenv("CEMU_TEST_INPUT_SETTINGS_SHOT"))
+					cemuLog_log(LogType::Force, "test: snapshot {}: {}", shot, MacSnapshotView(frame->GetHandle(), shot) ? "ok" : "failed");
+#endif
+				frame->EndModal(wxID_OK);
+			}, timer->GetId());
+			timer->StartOnce(seconds * 1000);
+			frame->ShowModal();
+			frame->Destroy();
+			cemuLog_log(LogType::Force, "test: input settings closed, quitting");
+			Close(true);
+		});
+	}
+
 	#ifdef ENABLE_DISCORD_RPC
 	if (GetWxGUIConfig().use_discord_presence)
 			m_discord = std::make_unique<DiscordPresence>();

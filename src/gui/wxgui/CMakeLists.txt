@@ -74,6 +74,14 @@ add_library(CemuWxGui STATIC
   input/InputAPIAddWindow.h
   input/InputSettings2.cpp
   input/InputSettings2.h
+  input/MappingControl.cpp
+  input/MappingControl.h
+  input/InputDetector.cpp
+  input/InputDetector.h
+  input/ExpressionDialog.cpp
+  input/ExpressionDialog.h
+  input/LiveIndicators.cpp
+  input/LiveIndicators.h
   input/panels/ClassicControllerInputPanel.cpp
   input/panels/ClassicControllerInputPanel.h
   input/panels/InputPanel.cpp
@@ -172,6 +180,12 @@ target_link_libraries(CemuWxGui PRIVATE
   PUBLIC
   CURL::libcurl
 )
+
+if(APPLE)
+	# test helper: window snapshots for CEMU_TEST_INPUT_SETTINGS_SHOT
+	target_sources(CemuWxGui PRIVATE helpers/MacSnapshot.mm)
+	set_source_files_properties(helpers/MacSnapshot.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_FLAGS "-fobjc-arc")
+endif()
 
 if(ENABLE_WXWIDGETS AND UNIX AND NOT APPLE)
 	# PUBLIC because gdk/gdkkeysyms.h is included in guiWrapper.h

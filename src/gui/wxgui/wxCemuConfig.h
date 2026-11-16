@@ -94,6 +94,10 @@ struct wxCemuConfig
 	Vector2i pad_size{-1, -1};
 	ConfigValue<bool> pad_maximized;
 
+	// Input settings window (fork): remembered size and position
+	Vector2i input_window_position{-1, -1};
+	Vector2i input_window_size{-1, -1};
+
 	ConfigValue<bool> check_update{true};
 	ConfigValue<bool> receive_untested_updates{false};
 	ConfigValue<bool> save_screenshot{true};

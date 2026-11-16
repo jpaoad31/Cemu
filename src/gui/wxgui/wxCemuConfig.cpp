@@ -54,6 +54,11 @@ void wxCemuConfig::Load(XMLConfigParser& parser)
 	pad_size.y = parser.get("pad_size").get("y", -1);
 	pad_maximized = parser.get("pad_maximized", false);
 
+	input_window_position.x = parser.get("input_window_position").get("x", -1);
+	input_window_position.y = parser.get("input_window_position").get("y", -1);
+	input_window_size.x = parser.get("input_window_size").get("x", -1);
+	input_window_size.y = parser.get("input_window_size").get("y", -1);
+
 	auto gamelist = parser.get("GameList");
 	game_list_style = gamelist.get("style", 0);
 	game_list_column_order = gamelist.get("order", "");
@@ -155,6 +160,12 @@ void wxCemuConfig::Save(XMLConfigParser& config)
 	psize.set<sint32>("x", pad_size.x);
 	psize.set<sint32>("y", pad_size.y);
 	config.set<bool>("pad_maximized", pad_maximized);
+	auto ipos = config.set("input_window_position");
+	ipos.set<sint32>("x", input_window_position.x);
+	ipos.set<sint32>("y", input_window_position.y);
+	auto isize = config.set("input_window_size");
+	isize.set<sint32>("x", input_window_size.x);
+	isize.set<sint32>("y", input_window_size.y);
 	config.set<bool>("show_icon_column", show_icon_column);
 
 	auto gamelist = config.set("GameList");

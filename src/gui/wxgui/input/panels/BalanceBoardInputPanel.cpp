@@ -28,7 +28,7 @@ BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 
 	auto* main_sizer = new wxBoxSizer(wxVERTICAL);
 
-	auto* info = new wxStaticText(this, wxID_ANY, _("The Balance Board always uses Wii Remote channel 4 (WPAD channel 3). Use a Wiimote on another controller for the menus.\nReal board: connect it (through a Wii BT Bridge, below on macOS, or pair it in the Bluetooth settings), then add it here with API \"Wiimote\". With a Wiimote controller added, the real board is the source and the options below are unused."));
+	auto* info = new wxStaticText(this, wxID_ANY, _("The Balance Board always uses Wii Remote channel 4 (WPAD channel 3). Use a Wiimote on another controller for the menus.\nReal board: connect it (through a Wii BT Bridge, below on macOS, or pair it in the Bluetooth settings), then add it here with API \"Wiimote\". While that device is a connected Balance Board it is the source and the options below are unused; if it is a Wii Remote or not connected, the emulated board is used and the line at the bottom says why."));
 	info->Wrap(600);
 	main_sizer->Add(info, 0, wxALL, 5);
 
@@ -119,6 +119,11 @@ BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 	Layout();
 }
 
+static bool board_is_axis(BalanceBoardController::ButtonId id)
+{
+	return id >= BalanceBoardController::kButtonId_Balance_Up && id <= BalanceBoardController::kButtonId_Balance_Right;
+}
+
 void BalanceBoardInputPanel::add_button_row(sint32 row, sint32 column, BalanceBoardController::ButtonId button_id)
 {
 	m_item_sizer->Add(
@@ -127,12 +132,7 @@ void BalanceBoardInputPanel::add_button_row(sint32 row, sint32 column, BalanceBo
 		wxDefaultSpan,
 		wxALL | wxALIGN_CENTER_VERTICAL, 5);
 
-	auto* text_ctrl = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxTE_PROCESS_ENTER | wxTE_PROCESS_TAB);
-	text_ctrl->SetClientData((void*)button_id);
-	text_ctrl->SetMinSize(wxSize(150, -1));
-	text_ctrl->SetEditable(false);
-	text_ctrl->SetBackgroundColour(kKeyColourNormalMode);
-	bind_hotkey_events(text_ctrl);
+	auto* text_ctrl = create_mapping_control(this, button_id, wxGetTranslation(wxString::FromUTF8(BalanceBoardController::get_button_name(button_id))), board_is_axis(button_id));
 	m_item_sizer->Add(text_ctrl, wxGBPosition(row, column + 1), wxDefaultSpan, wxALL | wxEXPAND, 5);
 }
 
