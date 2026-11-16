@@ -88,8 +88,8 @@ MetalSamplerCache::~MetalSamplerCache()
 
 MTL::SamplerState* MetalSamplerCache::GetSamplerState(const LatteContextRegister& lcr, LatteConst::ShaderType shaderType, uint32 stageSamplerIndex, const _LatteRegisterSetSampler* samplerWords)
 {
-    uint64 stateHash = CalculateSamplerHash(lcr, shaderType, stageSamplerIndex, samplerWords);
-    auto& samplerState = m_samplerCache[stateHash];
+    SamplerKey stateKey = CalculateSamplerKey(lcr, shaderType, stageSamplerIndex, samplerWords);
+    auto& samplerState = m_samplerCache[stateKey];
     if (samplerState)
         return samplerState;
 
@@ -148,6 +148,15 @@ MTL::SamplerState* MetalSamplerCache::GetSamplerState(const LatteContextRegister
     samplerDescriptor->setTAddressMode(GetMtlSamplerAddressMode(clampY));
     samplerDescriptor->setRAddressMode(GetMtlSamplerAddressMode(clampZ));
 
+    // modes Metal (like Vulkan) can only approximate: HALF_BORDER -> clampToEdge, MIRROR_ONCE_HALF_BORDER and
+    // MIRROR_ONCE_BORDER -> clampToBorderColor (the mirror-once half is lost)
+    auto isApproximateClamp = [](Latte::LATTE_SQ_TEX_SAMPLER_WORD0_0::E_CLAMP c) {
+        uint32 v = (uint32)c;
+        return v == 4 || v == 5 || v == 7;
+    };
+    if (isApproximateClamp(clampX) || isApproximateClamp(clampY) || isApproximateClamp(clampZ))
+        cemuLog_log(LogType::TextureCache, "Metal: sampler uses an approximated clamp mode (x {} y {} z {}; 4 = HALF_BORDER, 5 = MIRROR_ONCE_HALF_BORDER, 7 = MIRROR_ONCE_BORDER)", (uint32)clampX, (uint32)clampY, (uint32)clampZ);
+
     auto maxAniso = samplerWords->WORD0.get_MAX_ANISO_RATIO();
 
     if (maxAniso > 0)
@@ -170,21 +179,10 @@ MTL::SamplerState* MetalSamplerCache::GetSamplerState(const LatteContextRegister
     return samplerState;
 }
 
-uint64 MetalSamplerCache::CalculateSamplerHash(const LatteContextRegister& lcr, LatteConst::ShaderType shaderType, uint32 stageSamplerIndex, const _LatteRegisterSetSampler* samplerWords)
+MetalSamplerCache::SamplerKey MetalSamplerCache::CalculateSamplerKey(const LatteContextRegister& lcr, LatteConst::ShaderType shaderType, uint32 stageSamplerIndex, const _LatteRegisterSetSampler* samplerWords)
 {
-    uint64 hash = 0;
-    hash = std::rotl<uint64>(hash, 17);
-    hash += (uint64)samplerWords->WORD0.getRawValue();
-    hash = std::rotl<uint64>(hash, 17);
-    hash += (uint64)samplerWords->WORD1.getRawValue();
-    hash = std::rotl<uint64>(hash, 17);
-    hash += (uint64)samplerWords->WORD2.getRawValue();
-
+    // exact key: every field of the three sampler words, plus the border colour Metal will actually use
+    // (for the custom border colour type it depends on the TD_*_SAMPLER_BORDER_COLOR registers)
     auto borderColor = GetBorderColor(shaderType, stageSamplerIndex, samplerWords);
-
-    hash = std::rotl<uint64>(hash, 5);
-    hash += (uint64)borderColor;
-
-    // TODO: check this
-	return hash;
+    return {samplerWords->WORD0.getRawValue(), samplerWords->WORD1.getRawValue(), samplerWords->WORD2.getRawValue(), (uint32)borderColor};
 }

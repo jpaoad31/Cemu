@@ -205,6 +205,14 @@ device pointer when a device drops out (9ea9be7).
   so a CPU-read 16:9 tiled target would go stale: none found statically (the GX2Invalidate CPU callers are the Mii/
   SAMU icons, the trampoline map and the JPEG paths).
 
+- **Metal sampler cache collisions** (uncommitted until tested; `MetalSamplerCache.{h,cpp}`): the cache was keyed by a
+  64-bit rotate-and-add hash of the sampler words with no equality check, and WORD0 bits 0-14 (CLAMP_X/Y/Z, XY filters)
+  landed on the same hash bits as WORD1 bits 17-31 (MAX_LOD top bits, LOD_BIAS). E.g. CLAMP_LAST_TEXEL + MAX_LOD 10.0
+  hashed equal to WRAP + MAX_LOD 14.0, so a clamped texture got a cached repeat sampler: Monita's face in Nintendo Land
+  tiled sideways (Vulkan hashes every VkSamplerCreateInfo field, so it was fine). Now keyed by the exact
+  WORD0/WORD1/WORD2 + Metal border colour. New samplers using HALF_BORDER / MIRROR_ONCE_HALF_BORDER /
+  MIRROR_ONCE_BORDER (approximated as on Vulkan) are logged under the TextureCache log type. Upstream has the same bug.
+
 ## Upstream (Cemu's AI policy)
 
 Cemu's CONTRIBUTING.md (checked 2026-10-22): code from new contributors must be written and understood by a
