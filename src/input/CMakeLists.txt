@@ -1,5 +1,7 @@
 add_library(CemuInput
 	InputManager.cpp
+	InputDiagnostics.cpp
+	InputDiagnostics.h
 	InputManager.h
 	ControllerFactory.cpp
 	ControllerFactory.h

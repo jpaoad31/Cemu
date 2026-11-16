@@ -36,6 +36,8 @@ private:
 	void update_state();
 	void update_remote_gamepad_status();
 	uint32 m_remote_status_tick = 0;
+	void update_device_status();
+	uint32 m_device_status_tick = 0;
 
 	boost::signals2::connection m_controller_changed;
 	void on_controller_changed();

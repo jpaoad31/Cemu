@@ -441,6 +441,24 @@ std::vector<uint64> EmulatedController::get_mapping_ids() const
 	return result;
 }
 
+std::vector<std::pair<uint64, uint64>> EmulatedController::get_device_inputs(const ControllerBase& controller) const
+{
+	std::shared_lock lock(m_mutex);
+	std::vector<std::pair<uint64, uint64>> result;
+	const size_t index = ControllerDevices(m_controllers).index_of(controller);
+	if (index == InputExpr::kNoDevice)
+		return result;
+	for (const auto& [mapping, expr] : m_mappings)
+	{
+		for (const auto& leaf : expr.leaves())
+		{
+			if (leaf.device == index && leaf.input)
+				result.emplace_back(mapping, *leaf.input);
+		}
+	}
+	return result;
+}
+
 void EmulatedController::delete_mapping(uint64 mapping)
 {
 	std::scoped_lock lock(m_mutex);

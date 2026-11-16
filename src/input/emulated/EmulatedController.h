@@ -96,6 +96,8 @@ public:
 	// the binding's input on this device (the first one), for the old profile format
 	std::optional<uint64> get_mapping_button(uint64 mapping, const ControllerBase& controller) const;
 	std::vector<uint64> get_mapping_ids() const;
+	// every (control, input) pair that uses this device
+	std::vector<std::pair<uint64, uint64>> get_device_inputs(const ControllerBase& controller) const;
 	void delete_mapping(uint64 mapping);
 	void clear_mappings();
 	// this device's input for the control: replaces what this device had there, keeps other devices'

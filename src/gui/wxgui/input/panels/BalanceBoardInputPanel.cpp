@@ -231,21 +231,16 @@ void BalanceBoardInputPanel::on_timer(const EmulatedControllerPtr& emulated_cont
 
 	wxString label;
 	const auto real = board->get_real_board();
-	if (real.assigned)
+	// the data source in one line (real board, emulated, or emulated because the assigned real
+	// device isn't a connected board), then the live values of that source
+	const auto source = board->get_source_info();
+	const bool real_source = source.source == BalanceBoardController::Source::Real;
+	if (real_source)
 	{
 		// a real board is the source: its own load cells, converted with its own calibration
-		wxString state;
-		if (!real.connected)
-			state = _("not connected (connect or pair it, then wait a few seconds)");
-		else if (!real.is_board)
-			state = _("connected, but this Wii Remote is not a Balance Board");
-		else if (!real.calibrated)
-			state = _("connected, reading its calibration...");
-		else if (!real.has_data)
-			state = _("connected, waiting for its first report...");
-		else
-			state = real.crc_ok ? _("ready, calibration CRC ok") : _("ready, but the calibration CRC does NOT match");
-		label = wxString::Format(_("Source: real Balance Board (Wiimote %d): %s"), (int)real.device_index + 1, state);
+		label = wxString::FromUTF8(source.text);
+		if (real.ready() && !real.crc_ok)
+			label += _(" (the calibration CRC does NOT match)");
 
 		if (real.calibrated && real.has_data)
 		{
@@ -273,18 +268,21 @@ void BalanceBoardInputPanel::on_timer(const EmulatedControllerPtr& emulated_cont
 		double kg[BalanceBoardMath::kSensorCount];
 		for (int i = 0; i < BalanceBoardMath::kSensorCount; i++)
 			kg[i] = BalanceBoardMath::RawToKg(raw[i]);
-		label = wxString::Format(_("Source: emulated. %s  Total %.1f kg (TL %.1f  TR %.1f  BL %.1f  BR %.1f)"),
+		label = wxString::FromUTF8(source.text) + "\n" + wxString::Format(_("%s  Total %.1f kg (TL %.1f  TR %.1f  BL %.1f  BR %.1f)"),
 			board->is_stepped_off() ? _("Stepped off.") : _("On the board."),
 			kg[0] + kg[1] + kg[2] + kg[3], kg[BalanceBoardMath::kTopLeft], kg[BalanceBoardMath::kTopRight],
 			kg[BalanceBoardMath::kBottomLeft], kg[BalanceBoardMath::kBottomRight]);
 	}
 
 	// the options only drive the emulated board
-	if (m_weight->IsEnabled() == real.assigned)
+	if (m_weight->IsEnabled() == real_source)
 	{
 		for (auto* slider : {m_weight, m_foot_separation, m_foot_length, m_battery})
-			slider->Enable(!real.assigned);
+			slider->Enable(!real_source);
 	}
+	const wxColour colour = source.warning ? wxTheColourDatabase->Find("ERROR") : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+	if (m_status->GetForegroundColour() != colour)
+		m_status->SetForegroundColour(colour);
 	if (m_status->GetLabel() != label)
 	{
 		const bool relayout = m_status->GetLabel().Freq('\n') != label.Freq('\n');

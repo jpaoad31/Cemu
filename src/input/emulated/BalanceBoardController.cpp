@@ -185,6 +185,7 @@ BalanceBoardController::RealBoard BalanceBoardController::get_real_board() const
 
 	result.assigned = true;
 	result.device_index = wiimote->get_index();
+	result.name = wiimote->display_name();
 	result.connected = wiimote->is_connected();
 	if (!result.connected)
 		return result;
@@ -201,14 +202,55 @@ BalanceBoardController::RealBoard BalanceBoardController::get_real_board() const
 	return result;
 }
 
+bool BalanceBoardController::is_real_source(const RealBoard& real) const
+{
+	if (!real.assigned)
+		return false;
+	if (real.connected && real.is_board)
+		return true;
+	// it was a working board before (a dropout keeps the real source: the game gets an empty board)
+	std::scoped_lock lock(m_real_mutex);
+	return m_real_memory.has_value();
+}
+
 bool BalanceBoardController::uses_real_board() const
 {
-#ifdef SUPPORTS_WIIMOTE
-	std::shared_lock lock(m_mutex);
-	return std::any_of(m_controllers.cbegin(), m_controllers.cend(), [](const auto& c) { return c->api() == InputAPI::Wiimote; });
-#else
-	return false;
-#endif
+	return is_real_source(get_real_board());
+}
+
+BalanceBoardController::SourceInfo BalanceBoardController::get_source_info() const
+{
+	SourceInfo info;
+	const auto real = get_real_board();
+	const auto name = fmt::format("\"{}\" (Wiimote device {})", real.name, real.device_index);
+	if (!real.assigned)
+	{
+		info.source = Source::Emulated;
+		info.text = is_balance_mapped() ? "Emulated board: weight setting, balance from the mapped inputs"
+			: "Emulated board: weight setting, balance follows the mouse over the TV image";
+		return info;
+	}
+	if (!is_real_source(real))
+	{
+		info.source = Source::EmulatedFallback;
+		info.warning = true;
+		if (real.connected && !real.is_board)
+			info.text = fmt::format("Using the emulated board: {} is not a Balance Board. Remove it from this controller.", name);
+		else
+			info.text = fmt::format("Using the emulated board: the real board {} is not connected. It takes over when it connects.", name);
+		return info;
+	}
+	info.source = Source::Real;
+	if (real.ready())
+		info.text = fmt::format("Real board: {}, connected", name);
+	else if (!real.connected)
+	{
+		info.text = fmt::format("Real board: {}, NOT connected (the game sees an empty board until it's back)", name);
+		info.warning = true;
+	}
+	else
+		info.text = fmt::format("Real board: {}, connected, reading its calibration...", name);
+	return info;
 }
 
 void BalanceBoardController::send_real_command(uint8 command)
@@ -231,7 +273,7 @@ void BalanceBoardController::send_real_command(uint8 command)
 bool BalanceBoardController::is_real_calibration_pending() const
 {
 	const auto real = get_real_board();
-	if (!real.assigned)
+	if (!is_real_source(real))
 		return false;
 	if (real.connected && real.calibrated)
 		return false;
@@ -242,7 +284,7 @@ bool BalanceBoardController::is_real_calibration_pending() const
 BalanceBoardMath::ExtMemory BalanceBoardController::get_extension_memory() const
 {
 	const auto real = get_real_board();
-	if (!real.assigned)
+	if (!is_real_source(real))
 		return m_ext_memory;
 
 	std::scoped_lock lock(m_real_mutex);
@@ -257,7 +299,7 @@ BalanceBoardMath::ExtMemory BalanceBoardController::get_extension_memory() const
 uint8 BalanceBoardController::get_battery_raw() const
 {
 	const auto real = get_real_board();
-	if (real.assigned)
+	if (is_real_source(real))
 	{
 		if (real.ready())
 			return real.data.battery;
@@ -270,7 +312,22 @@ uint8 BalanceBoardController::get_battery_raw() const
 void BalanceBoardController::fill_balance_status(WPADBLStatus_t& status)
 {
 	const auto real = get_real_board();
-	if (real.assigned)
+	const bool real_source = is_real_source(real);
+	if (m_source_known && real_source != m_last_real_source)
+	{
+		// the game calibrated against the other source: make it attach the board again, so it
+		// reads the new calibration (Wii Fit U runs WBCSetupCalibration on connect)
+		cemuLog_log(LogType::InputAPI, "BalanceBoard: source changed to the {} board, reconnecting it for the game", real_source ? "real" : "emulated");
+		m_status = ConnectCallbackStatus::ReportDisconnect;
+	}
+	if (!m_source_known || real_source != m_last_real_source)
+	{
+		if (real.assigned && !real_source)
+			cemuLog_log(LogType::Force, "BalanceBoard: {}", get_source_info().text);
+	}
+	m_source_known = true;
+	m_last_real_source = real_source;
+	if (real_source)
 	{
 		// 0: ready, 1: not connected, 2: not a board, 3: no calibration/data yet
 		const int state = real.ready() ? 0 : !real.connected ? 1 : !real.is_board ? 2 : 3;

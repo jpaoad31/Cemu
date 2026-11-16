@@ -36,6 +36,7 @@
 #include <wx/display.h>
 #include "wxgui/input/settings/WiimoteControllerSettings.h"
 #include "util/EventService.h"
+#include "input/InputDiagnostics.h"
 #include "input/api/RemoteGamePad/RemoteGamePadController.h"
 #include "input/api/RemoteGamePad/RemoteGamePadMedia.h"
 
@@ -69,6 +70,8 @@ struct ControllerPage
 	wxChoice* m_remote_mic = nullptr;        // Remote GamePad: GamePad mic source
 	wxChoice* m_remote_speaker = nullptr;    // Remote GamePad: GamePad speaker target
 	wxChoice* m_remote_video = nullptr;      // Remote GamePad: size of the video sent to the phone
+	wxStaticText* m_devices_status = nullptr; // every attached device and its state
+	wxStaticText* m_warnings = nullptr;       // conflicts, a misassigned real Wii device, the board source
 
 	// panel
 	std::array<InputPanel*, EmulatedController::Type::MAX> m_panels{};
@@ -109,7 +112,7 @@ InputSettings2::InputSettings2(wxWindow* parent)
 	page_data->ref().m_panels[EmulatedController::Type::VPAD] = panel;
 
 	auto* first_page_sizer = dynamic_cast<wxGridBagSizer*>(first_page->GetSizer());
-	auto* panel_sizer = first_page_sizer->FindItemAtPosition(wxGBPosition(7, 0))->GetSizer();
+	auto* panel_sizer = first_page_sizer->FindItemAtPosition(wxGBPosition(8, 0))->GetSizer();
 	panel_sizer->Add(panel, 0, wxEXPAND);
 
 	panel->Show();
@@ -351,10 +354,22 @@ wxWindow* InputSettings2::initialize_page(size_t index)
 
 	}
 
-	sizer->Add(new wxStaticLine(page), wxGBPosition(6, 0), wxGBSpan(1, 6), wxEXPAND);
+	{
+		// devices and their state; warnings
+		auto* status_sizer = new wxBoxSizer(wxVERTICAL);
+		page_data.m_devices_status = new wxStaticText(page, wxID_ANY, wxEmptyString);
+		status_sizer->Add(page_data.m_devices_status, 0, wxBOTTOM, 2);
+		page_data.m_warnings = new wxStaticText(page, wxID_ANY, wxEmptyString);
+		page_data.m_warnings->SetForegroundColour(wxTheColourDatabase->Find("ERROR"));
+		page_data.m_warnings->Hide();
+		status_sizer->Add(page_data.m_warnings, 0);
+		sizer->Add(status_sizer, wxGBPosition(6, 0), wxGBSpan(1, 6), wxLEFT | wxRIGHT | wxEXPAND, 5);
+	}
+
+	sizer->Add(new wxStaticLine(page), wxGBPosition(7, 0), wxGBSpan(1, 6), wxEXPAND);
 
 	auto* panel_sizer = new wxBoxSizer(wxVERTICAL);
-	sizer->Add(panel_sizer, wxGBPosition(7, 0), wxGBSpan(1, 6), wxEXPAND | wxALL, 5);
+	sizer->Add(panel_sizer, wxGBPosition(8, 0), wxGBSpan(1, 6), wxEXPAND | wxALL, 5);
 
 	page->SetSizer(sizer);
 	page->Layout();
@@ -549,7 +564,7 @@ void InputSettings2::update_state()
 
 			page_data.m_panels[type] = panel;
 
-			auto* panel_sizer = sizer->FindItemAtPosition(wxGBPosition(7, 0))->GetSizer();
+			auto* panel_sizer = sizer->FindItemAtPosition(wxGBPosition(8, 0))->GetSizer();
 			wxASSERT(panel_sizer);
 			panel_sizer->Add(panel, 0, wxEXPAND);
 		}
@@ -667,9 +682,55 @@ void InputSettings2::update_remote_gamepad_status()
 	page_data.m_controller_connected->SetBitmap(remote->is_connected() ? m_connected : m_disconnected);
 }
 
+void InputSettings2::update_device_status()
+{
+	if (++m_device_status_tick % 10 != 0) // timer is 25 ms: refresh at ~4 Hz
+		return;
+	auto& page_data = get_current_page_data();
+	if (!page_data.m_devices_status)
+		return;
+
+	wxString devices, warnings;
+	if (page_data.m_controller)
+	{
+		for (const auto& c : page_data.m_controller->get_controllers())
+		{
+			devices += devices.empty() ? _("Devices: ") : wxString("\n         ");
+			devices += wxString::FromUTF8(fmt::format("{} [{}]: {}", c->display_name(), c->api_name(), InputDiagnostics::DeviceStatus(*c)));
+		}
+		if (devices.empty())
+			devices = _("Devices: none. Add one with +.");
+		for (const auto& w : InputDiagnostics::GetWarnings(m_notebook->GetSelection()))
+			warnings += (warnings.empty() ? wxString() : wxString("\n")) + wxString::FromUTF8((w.error ? "Problem: " : "Note: ") + w.text);
+	}
+
+	bool relayout = false;
+	if (page_data.m_devices_status->GetLabel() != devices)
+	{
+		relayout |= page_data.m_devices_status->GetLabel().Freq('\n') != devices.Freq('\n');
+		page_data.m_devices_status->SetLabel(devices);
+	}
+	if (page_data.m_warnings->GetLabel() != warnings)
+	{
+		relayout |= page_data.m_warnings->GetLabel().Freq('\n') != warnings.Freq('\n');
+		page_data.m_warnings->SetLabel(warnings);
+	}
+	if (page_data.m_warnings->IsShown() == warnings.empty())
+	{
+		page_data.m_warnings->Show(!warnings.empty());
+		relayout = true;
+	}
+	if (relayout)
+	{
+		m_notebook->GetCurrentPage()->Layout();
+		grow_to_fit();
+	}
+}
+
 void InputSettings2::on_timer(wxTimerEvent&)
 {
 	update_remote_gamepad_status();
+	update_device_status();
 
 	auto& page_data = get_current_page_data();
 	if (!page_data.m_controller) {

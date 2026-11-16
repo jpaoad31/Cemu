@@ -14,6 +14,10 @@
 //   that board's raw load cells, temperature and battery and the calibration read from it
 //   (WiimoteControllerProvider reads them, see BalanceBoardData). The settings sliders and the
 //   step off hotkeys are then unused; Power is the board's A button.
+//   If the assigned device is connected but isn't a board (a Wii Remote), or hasn't been seen
+//   since Cemu started, the emulated board is used instead and get_source_info() says why (the
+//   game used to get nothing and Wii Fit U waited forever for the calibration). Once the real
+//   board has delivered data it stays the source (a dropout gives an empty board, not 60 kg).
 class BalanceBoardController : public WPADController
 {
 	using base_type = WPADController;
@@ -50,13 +54,30 @@ public:
 		bool crc_ok = false;
 		bool has_data = false;   // load cell reports arrive
 		size_t device_index = 0;
+		std::string name;         // the assigned device's display name
 		uint8 status_battery = 0; // status report battery byte
 		BalanceBoardData data{};
 
 		bool ready() const { return connected && is_board && calibrated && has_data; }
 	};
 	RealBoard get_real_board() const;
+	// a real board is assigned and is (or was) a working board: the game gets its data
 	bool uses_real_board() const;
+
+	// where the game's board data comes from, for the settings window and warnings
+	enum class Source
+	{
+		Emulated,         // no real board assigned
+		Real,             // the assigned real board
+		EmulatedFallback, // a real board is assigned but isn't usable: emulated instead
+	};
+	struct SourceInfo
+	{
+		Source source = Source::Emulated;
+		std::string text; // one line for the UI
+		bool warning = false;
+	};
+	SourceInfo get_source_info() const;
 	// a real board is assigned but its calibration hasn't been read yet (WBC calibration waits)
 	bool is_real_calibration_pending() const;
 	// forwards a WPADControlBLC command to the real board, if one is the source
@@ -122,6 +143,9 @@ public:
 
 private:
 	void update_step_off();
+	bool is_real_source(const RealBoard& real) const;
+	bool m_last_real_source = false; // source of the last fill_balance_status (game thread)
+	bool m_source_known = false;
 
 	double m_weight = BalanceBoardMath::kDefaultWeight;
 	double m_foot_separation = BalanceBoardMath::kDefaultFootSeparation;

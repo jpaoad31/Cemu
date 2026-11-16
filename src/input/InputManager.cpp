@@ -3,6 +3,7 @@
 #include "input/ControllerFactory.h"
 #include "input/emulated/BalanceBoardController.h"
 #include "input/emulated/InputProfileBindings.h"
+#include "input/InputDiagnostics.h"
 #include <boost/property_tree/ini_parser.hpp>
 #include <pugixml.hpp>
 #include "Cafe/GameProfile/GameProfile.h"
@@ -820,6 +821,10 @@ void InputManager::apply_game_profile()
 			}
 		}
 	}
+
+	// misassigned devices fail silently in games (a Wii Remote as the board: Wii Fit U waited on a
+	// white screen); say so in the log
+	InputDiagnostics::LogWarnings();
 }
 
 std::vector<std::string> InputManager::get_profiles()
