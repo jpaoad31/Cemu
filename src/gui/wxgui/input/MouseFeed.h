@@ -5,6 +5,8 @@
 
 #include <wx/window.h>
 #include <wx/event.h>
+#include <wx/utils.h>
+#include <wx/mousestate.h>
 
 #include "input/MouseState.h"
 
@@ -49,4 +51,20 @@ inline void BindMouseFeed(wxWindow* canvas, MouseState::Source source)
 		MouseState::Get().on_button(source, MouseInputs::kLeft, event.IsGestureStart() || !event.IsGestureEnd(), p.x, p.y);
 		event.Skip();
 	});
+}
+
+// the input settings window: the mouse buttons as they are now, anywhere (active = false: none)
+inline void UpdateSettingsMouse(bool active)
+{
+	uint32_t mask = 0;
+	if (active)
+	{
+		const wxMouseState state = wxGetMouseState();
+		if (state.LeftIsDown()) mask |= 1u << MouseInputs::kLeft;
+		if (state.RightIsDown()) mask |= 1u << MouseInputs::kRight;
+		if (state.MiddleIsDown()) mask |= 1u << MouseInputs::kMiddle;
+		if (state.Aux1IsDown()) mask |= 1u << MouseInputs::kBack;
+		if (state.Aux2IsDown()) mask |= 1u << MouseInputs::kForward;
+	}
+	MouseState::Get().set_settings_buttons(mask, true);
 }

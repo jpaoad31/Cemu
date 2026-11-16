@@ -190,9 +190,11 @@ void InputAPIAddWindow::on_api_selected(wxCommandEvent& event)
 
     const auto selection = m_input_api->GetStringSelection();
 	// keyboard is a special case, as theres only one device supported atm
-	if (selection == wxString::FromUTF8(to_string(InputAPI::Keyboard)))
+	const bool single_device_api = selection == wxString::FromUTF8(to_string(InputAPI::Keyboard)) || selection == wxString::FromUTF8(to_string(InputAPI::Mouse));
+	if (single_device_api)
 	{
-		const auto controllers = InputManager::instance().get_api_provider(InputAPI::Keyboard)->get_controllers();
+		const auto api = selection == wxString::FromUTF8(to_string(InputAPI::Mouse)) ? InputAPI::Mouse : InputAPI::Keyboard;
+		const auto controllers = InputManager::instance().get_api_provider(api)->get_controllers();
 		if (!controllers.empty())
 		{
 			m_controller = controllers[0];

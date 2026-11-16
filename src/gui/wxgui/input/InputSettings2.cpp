@@ -25,6 +25,12 @@
 #include "wxgui/input/InputAPIAddWindow.h"
 #include "wxgui/input/InputDetector.h"
 #include "input/ControllerFactory.h"
+#include "input/InputPresets.h"
+#include "input/MouseState.h"
+#include "wxgui/input/MouseFeed.h"
+#include <wx/menu.h>
+#include <wx/eventfilter.h>
+#include <wx/utils.h>
 
 #ifdef HAS_BLUEZ
 #include "wxgui/input/PairingDialog.h"
@@ -68,6 +74,7 @@ struct ControllerPage
 	std::vector<DeviceRow> m_rows;
 	wxButton* m_add = nullptr;
 	wxButton* m_clear = nullptr;
+	wxButton* m_preset = nullptr;
 	wxStaticText* m_warnings = nullptr;
 
 	// Remote GamePad (shown while one is attached)
@@ -122,12 +129,31 @@ InputSettings2::InputSettings2(wxWindow* parent)
 
 	m_controller_changed = EventService::instance().connect<Events::ControllerChanged>(&InputSettings2::on_controller_changed, this);
 
+	// the wheel anywhere in this window (and its dialogs) goes to the Mouse device while it's open
+	struct WheelFilter : wxEventFilter
+	{
+		int FilterEvent(wxEvent& event) override
+		{
+			if (event.GetEventType() == wxEVT_MOUSEWHEEL)
+			{
+				auto& wheel = static_cast<wxMouseEvent&>(event);
+				if (wheel.GetWheelAxis() == wxMOUSE_WHEEL_VERTICAL && wheel.GetWheelDelta() > 0)
+					MouseState::Get().on_wheel(MouseState::kSettings, (float)wheel.GetWheelRotation() / (float)wheel.GetWheelDelta());
+			}
+			return Event_Skip;
+		}
+	};
+	m_mouse_filter = std::make_unique<WheelFilter>();
+	wxEvtHandler::AddFilter(m_mouse_filter.get());
+
 	if (const char* page = getenv("CEMU_TEST_INPUT_SETTINGS_PAGE")) // test hook, see MainWindow
 		m_notebook->SetSelection(std::clamp(atoi(page), 0, (int)InputManager::kMaxController - 1));
 }
 
 InputSettings2::~InputSettings2()
 {
+	wxEvtHandler::RemoveFilter(m_mouse_filter.get());
+	MouseState::Get().set_settings_buttons(0, false);
 	m_controller_changed.disconnect();
 	m_detector->cancel();
 
@@ -267,6 +293,10 @@ wxWindow* InputSettings2::initialize_page(size_t index)
 		page_data.m_clear = new wxButton(box->GetStaticBox(), wxID_ANY, _("Clear all bindings"));
 		page_data.m_clear->Bind(wxEVT_BUTTON, &InputSettings2::on_clear_bindings, this);
 		buttons->Add(page_data.m_clear, 0, wxALL, gap);
+		page_data.m_preset = new wxButton(box->GetStaticBox(), wxID_ANY, _("Load preset..."));
+		page_data.m_preset->SetToolTip(_("Replace the devices and bindings with a standard setup (keyboard + mouse, Remote GamePad, a gamepad, a real Wii Remote or board). Everything shows in the fields below and can be edited after."));
+		page_data.m_preset->Bind(wxEVT_BUTTON, &InputSettings2::on_load_preset, this);
+		buttons->Add(page_data.m_preset, 0, wxALL, gap);
 #ifdef HAS_BLUEZ
 		auto* pairing = new wxButton(box->GetStaticBox(), wxID_ANY, _("Pair Wii/Wii U Controller"));
 		pairing->Bind(wxEVT_BUTTON, [this](wxEvent&) {
@@ -385,7 +415,7 @@ void InputSettings2::rebuild_device_rows(ControllerPage& page_data)
 		defaults->SetToolTip(_("Replace this device's bindings with its defaults (other devices' bindings are kept)."));
 		defaults->Bind(wxEVT_BUTTON, [this, c](wxCommandEvent&) { device_defaults(c); });
 		row->Add(defaults, 0, wxALIGN_CENTER_VERTICAL | wxALL, gap);
-		if (c->api() != InputAPI::Keyboard)
+		if (c->api() != InputAPI::Keyboard && c->api() != InputAPI::Mouse)
 		{
 			auto* settings = new wxButton(parent, wxID_ANY, _("Settings..."), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
 			settings->SetToolTip(_("Dead zones, ranges, rumble, motion; Wii Remote options (speaker, ...)."));
@@ -426,6 +456,7 @@ void InputSettings2::update_state()
 
 	page_data.m_add->Enable(emulated_controller != nullptr);
 	page_data.m_clear->Enable(emulated_controller != nullptr);
+	page_data.m_preset->Enable(emulated_controller != nullptr);
 	rebuild_device_rows(page_data);
 
 	// binding panel
@@ -631,6 +662,7 @@ void InputSettings2::on_char_hook(wxKeyEvent& event)
 void InputSettings2::on_timer(wxTimerEvent&)
 {
 	++m_tick;
+	update_settings_mouse();
 	m_detector->poll();
 
 	auto& page_data = get_current_page_data();
@@ -723,6 +755,43 @@ void InputSettings2::on_clear_bindings(wxCommandEvent& event)
 	update_state();
 }
 
+void InputSettings2::on_load_preset(wxCommandEvent& event)
+{
+	auto& page_data = get_current_page_data();
+	if (!page_data.m_controller)
+		return;
+	m_detector->cancel();
+	const auto presets = InputPresets::ForType(page_data.m_controller->type());
+	if (presets.empty())
+	{
+		set_status(_("No presets for this controller type."), true);
+		return;
+	}
+	wxMenu menu;
+	for (size_t i = 0; i < presets.size(); ++i)
+	{
+		auto* item = menu.Append(1 + (int)i, wxString::FromUTF8(presets[i].name));
+		item->SetHelp(wxString::FromUTF8(presets[i].description));
+	}
+	const int choice = page_data.m_preset->GetPopupMenuSelectionFromUser(menu, 0, page_data.m_preset->GetSize().y);
+	if (choice < 1 || choice > (int)presets.size())
+		return;
+	const auto& preset = presets[choice - 1];
+	if (!page_data.m_controller->get_controllers().empty() &&
+		wxMessageBox(wxString::Format(_("Load the preset \"%s\"?\n\n%s\n\nIt replaces this controller's devices and bindings."), wxString::FromUTF8(preset.name), wxString::FromUTF8(preset.description)),
+			_("Load preset"), wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION, this) != wxYES)
+		return;
+	const auto result = InputPresets::Apply(*page_data.m_controller, preset.id);
+	set_status(wxString::FromUTF8(result.message), !result.ok);
+	update_state();
+}
+
+void InputSettings2::update_settings_mouse()
+{
+	// only while this window is the active one (not while a menu or another app has the mouse)
+	UpdateSettingsMouse(IsActive());
+}
+
 void InputSettings2::device_defaults(const std::shared_ptr<ControllerBase>& controller)
 {
 	auto& page_data = get_current_page_data();
@@ -762,6 +831,7 @@ void InputSettings2::device_settings(const std::shared_ptr<ControllerBase>& cont
 		break;
 	}
 	case InputAPI::Keyboard:
+	case InputAPI::Mouse:
 		break;
 #ifdef SUPPORTS_WIIMOTE
 	case InputAPI::Wiimote:

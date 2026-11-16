@@ -3,6 +3,7 @@
 #include "input/InputManager.h"
 #include "input/api/Controller.h"
 #include "input/emulated/BalanceBoardController.h"
+#include "input/api/Mouse/MouseInputs.h"
 #ifdef SUPPORTS_WIIMOTE
 #include "input/api/Wiimote/NativeWiimoteController.h"
 #endif
@@ -40,6 +41,8 @@ namespace InputDiagnostics
 		{
 		case InputAPI::Keyboard:
 			return "always available";
+		case InputAPI::Mouse:
+			return "always available (the game windows)";
 		case InputAPI::RemoteGamePad:
 			return connected ? "phone connected" : "waiting for the phone";
 #ifdef SUPPORTS_WIIMOTE
@@ -114,6 +117,33 @@ namespace InputDiagnostics
 						shared.emplace_back("...");
 					}
 					result.push_back({fmt::format("{} inputs also used by {}: {}", device_label(*device), controller_label(*other), fmt::join(shared, ", ")), false});
+				}
+			}
+		}
+
+		// the mouse cursor driving two emulated controllers (the GamePad tilt and the board's balance
+		// both following the mouse was the old implicit behaviour, now visible)
+		{
+			const auto uses_cursor = [](const EmulatedController& c) {
+				for (const auto& device : c.get_controllers())
+				{
+					if (device->api() != InputAPI::Mouse)
+						continue;
+					for (const auto& [mapping, input] : c.get_device_inputs(*device))
+					{
+						if (!MouseInputs::IsPressable(input))
+							return true;
+					}
+				}
+				return false;
+			};
+			if (uses_cursor(*self))
+			{
+				for (size_t i = 0; i < InputManager::kMaxController; ++i)
+				{
+					const auto other = i == player_index ? nullptr : manager.get_controller(i);
+					if (other && uses_cursor(*other))
+						result.push_back({fmt::format("The mouse cursor also drives {}: moving the mouse moves both (clear one's Mouse bindings if that isn't wanted).", controller_label(*other)), false});
 				}
 			}
 		}

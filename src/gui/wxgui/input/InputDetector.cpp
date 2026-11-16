@@ -1,3 +1,4 @@
+#include "wxgui/input/MouseFeed.h"
 #include "wxgui/input/InputDetector.h"
 
 #include "wxgui/input/MappingControl.h"
@@ -56,6 +57,10 @@ void InputDetector::start(const EmulatedControllerPtr& controller, uint64 mappin
 		auto keyboard = ControllerFactory::CreateController(InputAPI::Keyboard, "keyboard", "Keyboard");
 		if (keyboard && !is_attached(*keyboard))
 			m_candidates.push_back({keyboard, false, {}});
+		// clicks and the wheel (the mouse over the game windows, or anywhere in the settings window)
+		auto mouse = ControllerFactory::CreateController(InputAPI::Mouse, "mouse", "Mouse");
+		if (mouse && !is_attached(*mouse))
+			m_candidates.push_back({mouse, false, {}});
 	}
 	catch (const std::exception&)
 	{
@@ -73,6 +78,8 @@ void InputDetector::start(const EmulatedControllerPtr& controller, uint64 mappin
 		}
 	}
 
+	// the click that started this is held now: it must be in the mouse's baseline
+	UpdateSettingsMouse(true);
 	for (auto& candidate : m_candidates)
 	{
 		update_device(*candidate.controller);

@@ -22,14 +22,27 @@ private:
 	wxString m_inactive;
 };
 
-// the GamePad touch screen: a 16:9 box with the touch point
-class wxTouchDraw : public wxWindow
+// a pointer box (after Dolphin's IR indicator): the GamePad touch screen, the Wii Remote pointer on
+// the TV, the board's centre of balance. A box of the given aspect with the point: filled while
+// "pressed" (touching, visible), hollow otherwise; nothing when there is no point.
+class wxPointerBox : public wxWindow
 {
 public:
-	wxTouchDraw(wxWindow* parent);
-	void SetTouch(std::optional<std::array<float, 2>> position); // 0..1, top left origin
+	wxPointerBox(wxWindow* parent, float aspect = 16.0f / 9.0f, bool crosshair = false);
+	struct State
+	{
+		bool has_point = false;
+		bool pressed = false;
+		float x = 0.5f, y = 0.5f; // 0..1, top left origin
+		bool operator==(const State&) const = default;
+	};
+	void SetState(const State& state);
+	void SetCaption(const wxString& caption); // under the box, e.g. the source
 
 private:
 	void OnPaint(wxPaintEvent& event);
-	std::optional<std::array<float, 2>> m_position;
+	float m_aspect;
+	bool m_crosshair;
+	State m_state;
+	wxString m_caption;
 };

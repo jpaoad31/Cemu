@@ -63,6 +63,12 @@ private:
 
 	void on_controller_add(wxCommandEvent& event);
 	void on_clear_bindings(wxCommandEvent& event);
+	void on_load_preset(wxCommandEvent& event);
+
+	// clicks and the wheel anywhere while the window is open go to the Mouse device (Detect, live
+	// fields: the game windows get no events while this modal window is open)
+	std::unique_ptr<class wxEventFilter> m_mouse_filter;
+	void update_settings_mouse();
 
 	// per device
 	void device_defaults(const std::shared_ptr<ControllerBase>& controller);

@@ -73,44 +73,68 @@ void wxValueBars::OnPaint(wxPaintEvent&)
 	}
 }
 
-wxTouchDraw::wxTouchDraw(wxWindow* parent)
-	: wxWindow(parent, wxID_ANY)
+wxPointerBox::wxPointerBox(wxWindow* parent, float aspect, bool crosshair)
+	: wxWindow(parent, wxID_ANY), m_aspect(aspect), m_crosshair(crosshair)
 {
 	SetBackgroundStyle(wxBG_STYLE_PAINT);
-	SetMinSize(FromDIP(wxSize(96, 54)));
-	Bind(wxEVT_PAINT, &wxTouchDraw::OnPaint, this);
+	const int w = FromDIP(112);
+	SetMinSize(wxSize(w, (int)(w / aspect) + FromDIP(14)));
+	Bind(wxEVT_PAINT, &wxPointerBox::OnPaint, this);
 }
 
-void wxTouchDraw::SetTouch(std::optional<std::array<float, 2>> position)
+void wxPointerBox::SetState(const State& state)
 {
-	if (position == m_position)
+	if (state == m_state)
 		return;
-	m_position = position;
+	m_state = state;
 	Refresh(false);
 }
 
-void wxTouchDraw::OnPaint(wxPaintEvent&)
+void wxPointerBox::SetCaption(const wxString& caption)
+{
+	if (caption == m_caption)
+		return;
+	m_caption = caption;
+	Refresh(false);
+}
+
+void wxPointerBox::OnPaint(wxPaintEvent&)
 {
 	wxAutoBufferedPaintDC dc(this);
 	dc.SetBackground(wxBrush(GetParent()->GetBackgroundColour()));
 	dc.Clear();
 	const wxSize size = GetClientSize();
-	int w = size.x, h = size.x * 9 / 16;
-	if (h > size.y)
+	const int caption_h = FromDIP(14);
+	int h = std::max(1, size.y - caption_h), w = (int)(h * m_aspect);
+	if (w > size.x)
 	{
-		h = size.y;
-		w = h * 16 / 9;
+		w = size.x;
+		h = (int)(w / m_aspect);
 	}
-	const wxRect screen(0, 0, w - 1, h - 1);
-	dc.SetPen(wxPen(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT)));
+	const wxRect box((size.x - w) / 2, 0, w - 1, h - 1);
+	const wxColour grey = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+	dc.SetPen(wxPen(grey));
 	dc.SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW)));
-	dc.DrawRectangle(screen);
-	if (m_position)
+	dc.DrawRectangle(box);
+	if (m_crosshair)
 	{
-		const int x = screen.x + (int)((*m_position)[0] * screen.width);
-		const int y = screen.y + (int)((*m_position)[1] * screen.height);
-		dc.SetPen(*wxTRANSPARENT_PEN);
-		dc.SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
+		dc.SetPen(wxPen(grey, 1, wxPENSTYLE_DOT));
+		dc.DrawLine(box.x + box.width / 2, box.y, box.x + box.width / 2, box.y + box.height);
+		dc.DrawLine(box.x, box.y + box.height / 2, box.x + box.width, box.y + box.height / 2);
+	}
+	if (m_state.has_point)
+	{
+		const int x = box.x + (int)(std::clamp(m_state.x, 0.0f, 1.0f) * box.width);
+		const int y = box.y + (int)(std::clamp(m_state.y, 0.0f, 1.0f) * box.height);
+		const wxColour accent = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT);
+		dc.SetPen(wxPen(accent, FromDIP(2)));
+		dc.SetBrush(m_state.pressed ? wxBrush(accent) : *wxTRANSPARENT_BRUSH);
 		dc.DrawCircle(x, y, FromDIP(4));
+	}
+	if (!m_caption.empty())
+	{
+		dc.SetFont(GetFont().Smaller());
+		dc.SetTextForeground(grey);
+		dc.DrawText(m_caption, box.x, box.y + box.height + FromDIP(1));
 	}
 }

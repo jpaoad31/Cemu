@@ -1,3 +1,4 @@
+#include "input/api/Mouse/MouseInputs.h"
 #include "wxgui/input/ExpressionDialog.h"
 
 #include <wx/sizer.h>
@@ -158,6 +159,16 @@ void ExpressionDialog::fill_inputs()
 	const bool keyboard = c->api() == InputAPI::Keyboard;
 	const uint64 limit = keyboard ? 0x200 : kButtonMAX;
 	wxArrayString names;
+	if (c->api() == InputAPI::Mouse)
+	{
+		for (const auto id : MouseInputs::AllIds())
+		{
+			names.Add(wxString::FromUTF8(c->get_button_name(id)));
+			m_input_ids.emplace_back(id);
+		}
+		m_inputs->Append(names);
+		return;
+	}
 	for (uint64 id = 0; id < limit; ++id)
 	{
 		const auto name = c->get_button_name(id);

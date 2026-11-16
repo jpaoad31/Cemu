@@ -4,6 +4,7 @@
 #include <wx/statbox.h>
 #include <wx/stattext.h>
 #include <wx/checkbox.h>
+#include <wx/button.h>
 
 #include "wxgui/helpers/wxHelpers.h"
 #include "wxgui/components/wxInputDraw.h"
@@ -71,21 +72,44 @@ VPADInputPanel::VPADInputPanel(wxWindow* parent)
 	col3->Add(extras, 0, wxEXPAND | wxALL, gap);
 	main_sizer->Add(col3, 1, wxEXPAND);
 
-	// motion and touch (live)
-	auto* col4 = new wxBoxSizer(wxVERTICAL);
-	auto* motion = new wxStaticBoxSizer(wxVERTICAL, this, _("Motion"));
-	m_motion = new wxValueBars(motion->GetStaticBox(), {_("Accel X"), _("Accel Y"), _("Accel Z"), _("Gyro X"), _("Gyro Y"), _("Gyro Z")});
-	m_motion->SetToolTip(_("From the devices with \"Use motion\" on (SDL, DSU, Remote GamePad; in the device's Settings). Without one, drag with the right mouse button in the game window."));
-	motion->Add(m_motion, 0, wxEXPAND | wxALL, gap);
-	col4->Add(motion, 0, wxEXPAND | wxALL, gap);
-	auto* touch = new wxStaticBoxSizer(wxVERTICAL, this, _("Touch screen"));
-	m_touch = new wxTouchDraw(touch->GetStaticBox());
-	m_touch->SetToolTip(_("Touch from a device (Remote GamePad), else the left mouse button on the GamePad image."));
-	touch->Add(m_touch, 0, wxEXPAND | wxALL, gap);
-	col4->Add(touch, 0, wxEXPAND | wxALL, gap);
-	main_sizer->Add(col4, 1, wxEXPAND);
+	// touch and motion: explicit groups (fork): nothing uses the mouse unless a binding says so
+	auto* outer = new wxBoxSizer(wxVERTICAL);
+	outer->Add(main_sizer, 0, wxEXPAND);
+	auto* row2 = new wxBoxSizer(wxHORIZONTAL);
 
-	SetSizer(main_sizer);
+	wxFlexGridSizer* grid = nullptr;
+	auto* touch = create_group(this, _("Touch screen"), {
+		{V::kButtonId_Touch_Up, name(V::kButtonId_Touch_Up)}, {V::kButtonId_Touch_Down, name(V::kButtonId_Touch_Down)},
+		{V::kButtonId_Touch_Left, name(V::kButtonId_Touch_Left)}, {V::kButtonId_Touch_Right, name(V::kButtonId_Touch_Right)},
+		{V::kButtonId_Touch_Press, name(V::kButtonId_Touch_Press)},
+	}, true, &grid);
+	touch->GetStaticBox()->SetToolTip(_("Where the GamePad screen is touched (like a stick: the cursor's half axes) and when. Default with the Mouse device: the cursor over the GamePad window (the main window when there is none) and its left button. A Remote GamePad's own touches win while the phone is touched."));
+	m_touch = new wxPointerBox(touch->GetStaticBox(), 16.0f / 9.0f);
+	touch->Add(m_touch, 0, wxEXPAND | wxALL, gap);
+	touch->Add(create_clear_button(touch->GetStaticBox(), {V::kButtonId_Touch_Up, V::kButtonId_Touch_Down, V::kButtonId_Touch_Left, V::kButtonId_Touch_Right, V::kButtonId_Touch_Press}, _("the touch screen")), 0, wxALL, gap);
+	row2->Add(touch, 1, wxEXPAND | wxALL, gap);
+
+	auto* motion = new wxStaticBoxSizer(wxVERTICAL, this, _("Motion"));
+	m_motion_source = new wxStaticText(motion->GetStaticBox(), wxID_ANY, wxEmptyString);
+	motion->Add(m_motion_source, 0, wxEXPAND | wxALL, gap);
+	m_motion = new wxValueBars(motion->GetStaticBox(), {_("Accel X"), _("Accel Y"), _("Accel Z"), _("Gyro X"), _("Gyro Y"), _("Gyro Z")});
+	m_motion->SetToolTip(_("From a device with \"Use motion\" on (SDL, DSU, Remote GamePad; in the device's Settings). It wins over the emulated tilt."));
+	motion->Add(m_motion, 0, wxEXPAND | wxALL, gap);
+	auto* tilt = create_group(motion->GetStaticBox(), _("Emulated tilt (when no device gives motion)"), {
+		{V::kButtonId_Tilt_Up, name(V::kButtonId_Tilt_Up)}, {V::kButtonId_Tilt_Down, name(V::kButtonId_Tilt_Down)},
+		{V::kButtonId_Tilt_Left, name(V::kButtonId_Tilt_Left)}, {V::kButtonId_Tilt_Right, name(V::kButtonId_Tilt_Right)},
+		{V::kButtonId_Turn_Left, name(V::kButtonId_Turn_Left)}, {V::kButtonId_Turn_Right, name(V::kButtonId_Turn_Right)},
+		{V::kButtonId_Tilt_Hold, name(V::kButtonId_Tilt_Hold)},
+	}, true);
+	tilt->GetStaticBox()->SetToolTip(_("Tilts the GamePad by a position (the default \"mouse drag\": the cursor while the right button is held) and turns it (the wheel). With \"hold to tilt\" bound, it only tilts while that is held. Clear it to stop the mouse from tilting the GamePad."));
+	m_tilt = new wxValueBars(tilt->GetStaticBox(), {_("Tilt X"), _("Tilt Y"), _("Turn")});
+	tilt->Add(m_tilt, 0, wxEXPAND | wxALL, gap);
+	tilt->Add(create_clear_button(tilt->GetStaticBox(), {V::kButtonId_Tilt_Up, V::kButtonId_Tilt_Down, V::kButtonId_Tilt_Left, V::kButtonId_Tilt_Right, V::kButtonId_Turn_Left, V::kButtonId_Turn_Right, V::kButtonId_Tilt_Hold}, _("the emulated tilt")), 0, wxALL, gap);
+	motion->Add(tilt, 0, wxEXPAND | wxALL, gap);
+	row2->Add(motion, 1, wxEXPAND | wxALL, gap);
+
+	outer->Add(row2, 0, wxEXPAND);
+	SetSizer(outer);
 	Layout();
 }
 
@@ -100,6 +124,12 @@ void VPADInputPanel::on_timer(const EmulatedControllerPtr& emulated_controller, 
 	m_left_draw->SetAxisValue(emulated_controller->get_axis());
 	m_right_draw->SetAxisValue(emulated_controller->get_rotation());
 
+	auto* vpad = static_cast<VPADController*>(emulated_controller.get());
+	const auto tilt = vpad->get_tilt();
+	const auto set_label = [](wxStaticText* t, const wxString& text) {
+		if (t->GetLabel() != text)
+			t->SetLabel(text);
+	};
 	if (emulated_controller->has_motion())
 	{
 		auto sample = emulated_controller->get_motion_data();
@@ -107,17 +137,32 @@ void VPADInputPanel::on_timer(const EmulatedControllerPtr& emulated_controller, 
 		sample.getAccelerometer(acc);
 		sample.getGyrometer(gyro);
 		m_motion->SetValues({acc[0] / 2, acc[1] / 2, acc[2] / 2, gyro[0] / 8, gyro[1] / 8, gyro[2] / 8});
+		set_label(m_motion_source, _("Source: the motion device (\"Use motion\")."));
 	}
 	else
-		m_motion->SetInactive(_("No motion device (mouse fallback)"));
-
-	if (emulated_controller->has_position())
 	{
-		const auto p = emulated_controller->get_position();
-		m_touch->SetTouch(std::array<float, 2>{p.x, p.y});
+		m_motion->SetInactive(_("No device with \"Use motion\""));
+		set_label(m_motion_source, tilt.bound ? _("Source: the emulated tilt below.") : _("No motion: no motion device, no tilt bindings."));
 	}
+	if (tilt.bound)
+		m_tilt->SetValues({tilt.active ? tilt.tilt.x : 0.0f, tilt.active ? tilt.tilt.y : 0.0f, tilt.active ? tilt.turn : 0.0f});
 	else
-		m_touch->SetTouch(std::nullopt);
+		m_tilt->SetInactive(_("Not bound"));
+
+	const auto touch = vpad->get_touch();
+	wxPointerBox::State state;
+	state.has_point = touch.bound;
+	state.pressed = touch.touching;
+	state.x = touch.position.x;
+	state.y = touch.position.y;
+	m_touch->SetState(state);
+	bool remote = false;
+	for (const auto& c : emulated_controller->get_controllers())
+		remote |= c->api() == InputAPI::RemoteGamePad;
+	wxString caption = touch.device ? _("phone touching") : touch.touching ? _("touching") : touch.bound ? wxString() : _("not bound");
+	if (remote && !touch.device)
+		caption += (caption.empty() ? "" : " - ") + _("phone touch wins");
+	m_touch->SetCaption(caption);
 }
 
 void VPADInputPanel::load_controller(const EmulatedControllerPtr& controller)

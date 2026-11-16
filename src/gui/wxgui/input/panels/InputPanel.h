@@ -12,6 +12,7 @@
 class ControllerBase;
 class wxStaticBoxSizer;
 class wxFlexGridSizer;
+class wxButton;
 
 // Base of the emulated controller panels (fork rework, see INPUT_REWORK.md): binding fields
 // (MappingControl) with live state, detect / clear / advanced per field.
@@ -38,6 +39,9 @@ protected:
 	// a titled group with a "label: field" row per control; returns the box sizer (its static box
 	// is the parent of the rows' windows)
 	wxStaticBoxSizer* create_group(wxWindow* parent, const wxString& title, const std::vector<std::pair<uint64, wxString>>& rows, bool analogue = false, wxFlexGridSizer** grid_out = nullptr);
+
+	// a small button that clears the bindings of a group (the mouse groups: "remove the mouse")
+	wxButton* create_clear_button(wxWindow* parent, std::vector<uint64> ids, const wxString& what);
 
 	EmulatedControllerPtr m_controller;
 	std::vector<MappingControl*> m_controls;

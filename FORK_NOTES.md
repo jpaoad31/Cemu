@@ -223,6 +223,16 @@ device pointer when a device drops out (9ea9be7).
   fixes stuck-key capture on macOS), Shift-click adds, right-click menu, Advanced expression editor, motion
   and touch indicators, remembered window size/position. macOS keys get names (were `key_N`).
   Test hooks `CEMU_TEST_INPUT_SETTINGS[_PAGE|_SHOT]`.
+- **Explicit mouse input and presets** (branch `input-pointer`, committed, not yet tested by hand; see
+  `INPUT_REWORK.md` "Mouse and pointer groups"): nothing reads the mouse implicitly any more. A **Mouse**
+  device (API "Mouse") with per-window inputs (`TV `/`GamePad `/any: buttons, wheel, Cursor X/Y and half
+  axes, Move) is a binding source like the keyboard. New binding groups: GamePad **Touch screen** and
+  **Emulated tilt** (the old right-drag + wheel), Wii Remote **Pointer (IR)** with Dolphin's Point settings
+  (centre, width/height, relative, auto-hide, hide/recenter), Balance Board **Centre of balance** (no mouse
+  fallback). Pointer-box indicators. Old profiles (no `<bindings version="2">`) get the old implicit use as
+  explicit Mouse bindings. **Load preset...** per emulated controller (compiled in, `input/InputPresets.cpp`).
+  Also fixed: the GamePad window's right button never registered as held (it read the left button), and the
+  imgui overlay consumed the touch screen's click latch.
 
 ## Upstream (Cemu's AI policy)
 

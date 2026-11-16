@@ -35,6 +35,64 @@ Modelled on Dolphin's input system (design only: Cemu is MPL-2.0, Dolphin GPL; a
 - The window **remembers its size and position**, scrolls when smaller than its content, and grows to fit a
   larger panel (within the screen).
 
+## Mouse and pointer groups (branch `input-pointer`)
+
+Nothing in the emulated controllers reads the mouse any more: the mouse is a **device** ("Mouse", always
+available, listed with the others, Remove takes all its bindings away) and the controls it used to drive
+implicitly are **binding groups**. Design after Dolphin (`ControllerInterface` cursor inputs, the Point/IR
+group), our own code.
+
+**Mouse inputs** (`input/api/Mouse/MouseInputs.h`, state in `input/MouseState.*`, fed by the game windows'
+canvases via `wxgui/input/MouseFeed.h`). Each input exists for three windows: no prefix = the game window the
+mouse is in (or was last in), `TV ` = the main window, `GamePad ` = the GamePad window when open, else the
+main window.
+
+| input | value |
+|---|---|
+| `Left` `Right` `Middle` `Back` `Forward` | pressed in that window (a click lasts at least 50 ms) |
+| `Wheel Up` `Wheel Down` | pressed for 100 ms per notch |
+| `Cursor X` `Cursor Y` | position over the window's image, -1..1, Y down |
+| `Cursor X+` `X-` `Y+` `Y-` | the half axes, 0..1 (what the groups bind, like stick directions) |
+| `Move X+` `X-` `Y+` `Y-` | relative motion (1 = the image width in half a second); `` `Mouse:Move X+` & `Mouse:Right` `` = only while dragging |
+
+Only buttons and the wheel are "pressed", so **Detect** catches clicks and the wheel, not moves. While the
+input settings window is open (it is modal: the game windows get no events), any click in it counts as the
+no-prefix buttons and its wheel as the wheel, so Detect works there; a click in the window binds `Left`.
+Window-specific inputs (`GamePad Left`, `TV Cursor X+`...) are picked in Advanced... or come from defaults
+and presets.
+
+**Groups and the Mouse device's defaults** (`input/emulated/MouseBindings.*`, control ids 100+ so they stay
+out of the button loops):
+
+| controller | group (controls) | Mouse default | other sources |
+|---|---|---|---|
+| GamePad | Touch screen (up/down/left/right, touch) | `GamePad Cursor` half axes + `GamePad Left` | a Remote GamePad's own touch wins while the phone is touched |
+| GamePad | Emulated tilt (tilt up/down/left/right, turn left/right, hold to tilt) | `Cursor` half axes, `Wheel Up/Down`, hold = `Right` (the old right-drag tilt; 140 deg/s per turn input = 14 deg per notch) | a device with "Use motion" (SDL, DSU, Remote GamePad) wins |
+| Wii Remote | Pointer (IR) (up/down/left/right, hide, recenter) + settings centre X/Y, width/height, relative, auto-hide (saved as `<pointer>`) | `TV Cursor` half axes; A = `TV Left`, B = `TV Right` | a real Wii Remote's IR wins while it sees the bar |
+| Balance Board | Centre of balance (front/back/left/right) | `TV Cursor` half axes | none bound = centred (no more mouse fallback) |
+
+Indicators: a pointer box per group (filled = touching / visible, hollow = not), the tilt's bars next to the
+motion device's bars. Every group has a **Clear** button. A note under the device list says when the mouse
+cursor drives two emulated controllers (e.g. GamePad tilt and board balance).
+
+**Old profiles** (`<bindings>` missing or without `version="2"`) get today's implicit behaviour as explicit
+bindings on load (the Mouse device is added): GamePad touch unless the touch group is bound, GamePad tilt
+unless the tilt group is bound, the board's balance unless bound or a real Wii device is assigned. The Wii
+Remote, Pro and Classic got nothing from the mouse before and get nothing now. Saved as `version="2"`;
+older builds skip the "Mouse" device (unknown API) and ignore ids 100+. One difference: with a GamePad
+window open, clicking the TV window no longer touches the GamePad screen (touch is "the GamePad view").
+
+**Presets** (`input/InputPresets.cpp`, compiled in; **Load preset...** next to Add device): replace the
+devices and bindings, then everything is editable.
+- GamePad: *Keyboard + mouse* (A X, B Z, X C, Y V, L Q, R E, ZL 1, ZR 3, + Return, - Backspace, Home H,
+  arrows D-pad, WASD left stick + F, IJKL right stick + G, Mic M, Show screen Tab; mouse touch + drag tilt),
+  *Remote GamePad (iPhone)* (motion on), *Xbox / PlayStation / Switch Pro controller (SDL)* (first connected
+  pad, motion on when it has a gyro, else mouse tilt; mouse touch), *Keyboard + Remote GamePad*.
+- Wii Remote: *Keyboard + mouse pointer* (pointer = TV cursor, A TV click | X, B right click | Z, 1 2, = +,
+  - -, H home, arrows, Nunchuk WASD/C/Shift, R recenter), *Real Wii Remote* (a connected one).
+- Balance Board: *Emulated: keyboard + mouse* (P power, O step off, balance = TV cursor), *Real board*.
+- Pro / Classic: *SDL gamepad*.
+
 ## Expressions
 
 Inputs are written in backticks: `` `API/uuid:Input` `` (canonical, as saved) or `` `API:Input` `` (the first
@@ -89,7 +147,10 @@ unchanged) and get one new element:
 |---|---|
 | `input/emulated/InputExpression.*` | parser, evaluation, canonical printing, list editing |
 | `input/emulated/InputProfileBindings.*` | `<bindings>` and old `<mappings>` read/write (pugixml only) |
-| `input/emulated/InputExpressionTest.cpp` | standalone test: parser, evaluation, functions, list editing, old->new profile |
+| `input/emulated/InputExpressionTest.cpp` | standalone test: parser, evaluation, functions, list editing, old->new profile, Mouse inputs, implicit mouse -> bindings |
+| `input/api/Mouse/*`, `input/MouseState.*`, `wxgui/input/MouseFeed.h` | the Mouse device |
+| `input/emulated/MouseBindings.*` | group ids, Mouse defaults, old-profile conversion |
+| `input/InputPresets.*` | Load preset... |
 | `input/emulated/EmulatedController.*` | one expression per control; `set_mapping` (device's input), `add_mapping`, `replace_mapping`, `set_mapping_expression`, `set_default_mapping(device, replace)` |
 | `*Controller.cpp` (VPAD, Pro, Classic, Wiimote, BalanceBoard) | `get_default_mapping()` (was `set_default_mapping`) |
 | `input/emulated/BalanceBoardController.*` | `is_real_source`, `get_source_info`, fallback, reconnect on source change |
@@ -108,7 +169,7 @@ Wiimote / board / bridge internals were left alone apart from `BalanceBoardContr
     P=build/vcpkg_installed/arm64-osx
     clang++ -std=c++20 -Wall -I src -I $P/include src/input/emulated/InputExpressionTest.cpp \
       src/input/emulated/InputExpression.cpp src/input/emulated/InputProfileBindings.cpp \
-      $P/lib/libpugixml.a -o /tmp/exprtest && /tmp/exprtest
+      src/input/emulated/MouseBindings.cpp $P/lib/libpugixml.a -o /tmp/exprtest && /tmp/exprtest
 
 Scripted window check with a **portable** data folder (a `portable/` directory next to the .app; never the
 user's settings): `CEMU_TEST_INPUT_SETTINGS=SECONDS` opens Input settings at startup, closes it after SECONDS
@@ -119,7 +180,12 @@ Verified that way: old-format profiles (keyboard + Remote GamePad on the GamePad
 a Wiimote and a Balance Board controller) load, show `X [Keyboard] | A [Remote GamePad ...]`, are saved with
 `<bindings>` plus the old `<mappings>`; the board tab shows the conflict and the fallback to the emulated board.
 
-Not verified (needs hands): Detect with real key presses and pads, the Advanced editor, Wii devices,
+Mouse groups, verified the same way: an old-format GamePad profile and an old board profile load with the
+Mouse device and the touch/tilt and balance bindings (saved as `version="2"`); a Wiimote profile shows the
+pointer group, its settings and the IR box; the board shows the centre-of-balance box; the cursor note.
+
+Not verified (needs hands): mouse touch/tilt/pointer/balance in a game, Detect of clicks and the wheel, the
+presets with real devices, Detect with real key presses and pads, the Advanced editor, Wii devices,
 the board fallback during a Wii Fit U session, live indicators with real input.
 
 ## Left for later
@@ -127,4 +193,5 @@ the board fallback during a Wii Fit U session, live indicators with real input.
 - Hotkeys (`HotkeySettings`) still use their own one-key mapping.
 - Emulated Wii Remote speaker output/volume in the UI (FORK_NOTES "for the input settings redo").
 - A global "Wii devices" section for the bridge; per-device profiles (Dolphin's per-device default files).
-- Expression editor niceties: syntax colouring, a mouse axis input.
+- Expression editor niceties: syntax colouring.
+- The raw WPAD read (not KPAD) still has no pointer data ("todo fill position api"), as upstream.

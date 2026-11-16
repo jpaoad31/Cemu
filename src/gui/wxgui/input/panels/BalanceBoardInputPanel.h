@@ -4,7 +4,7 @@
 #include "input/emulated/BalanceBoardController.h"
 
 class wxGridBagSizer;
-class wxInputDraw;
+class wxPointerBox;
 class wxSlider;
 class wxStaticText;
 class wxButton;
@@ -30,7 +30,8 @@ private:
 	void update_setting_texts();
 
 	wxGridBagSizer* m_item_sizer;
-	wxInputDraw* m_draw;
+	wxPointerBox* m_draw; // centre of balance
+	void show_balance(bool has_point, float x, float y); // x right, y front, -1..1
 
 	wxSlider* m_weight;
 	wxSlider* m_foot_separation;

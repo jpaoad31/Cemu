@@ -1,6 +1,7 @@
 #include "wxgui/input/panels/InputPanel.h"
 
 #include <wx/menu.h>
+#include <wx/button.h>
 #include <wx/sizer.h>
 #include <wx/statbox.h>
 #include <wx/stattext.h>
@@ -48,6 +49,21 @@ wxStaticBoxSizer* InputPanel::create_group(wxWindow* parent, const wxString& tit
 	if (grid_out)
 		*grid_out = grid;
 	return box;
+}
+
+wxButton* InputPanel::create_clear_button(wxWindow* parent, std::vector<uint64> ids, const wxString& what)
+{
+	auto* button = new wxButton(parent, wxID_ANY, _("Clear"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+	button->SetToolTip(wxString::Format(_("Remove all bindings of %s (nothing drives it then)."), what));
+	button->Bind(wxEVT_BUTTON, [this, ids, what](wxCommandEvent&) {
+		if (!m_controller)
+			return;
+		for (const auto id : ids)
+			m_controller->delete_mapping(id);
+		refresh_bindings();
+		report(wxString::Format(_("%s: bindings cleared."), what));
+	});
+	return button;
 }
 
 void InputPanel::on_timer(const EmulatedControllerPtr& emulated_controller, const ControllerPtr&)

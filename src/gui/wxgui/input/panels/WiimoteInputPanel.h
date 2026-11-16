@@ -7,6 +7,8 @@
 class wxCheckBox;
 class wxGridBagSizer;
 class wxInputDraw;
+class wxPointerBox;
+class wxStaticText;
 
 class WiimoteInputPanel : public InputPanel
 {
@@ -37,6 +39,14 @@ private:
 	std::vector<wxWindow*> m_nunchuck_items;
 
 	void add_button_row(sint32 row, sint32 column, const WiimoteController::ButtonId &button_id);
+
+	// fork: the pointer (IR) group, like Dolphin's Point
+	wxPointerBox* m_pointer = nullptr;
+	wxSlider* m_pointer_center_x = nullptr, * m_pointer_center_y = nullptr;
+	wxSlider* m_pointer_width = nullptr, * m_pointer_height = nullptr;
+	wxCheckBox* m_pointer_relative = nullptr, * m_pointer_auto_hide = nullptr;
+	void on_pointer_setting(wxCommandEvent& event);
+	void show_pointer_settings(const WiimoteController::PointerSettings& settings);
 };
 
 

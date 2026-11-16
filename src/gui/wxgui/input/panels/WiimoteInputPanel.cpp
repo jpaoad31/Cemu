@@ -12,6 +12,9 @@
 #include "input/emulated/WiimoteController.h"
 #include "wxgui/helpers/wxHelpers.h"
 #include "wxgui/components/wxInputDraw.h"
+#include "wxgui/input/LiveIndicators.h"
+#include <wx/statbox.h>
+#include <wx/sizer.h>
 #ifdef SUPPORTS_WIIMOTE
 #include "wxgui/input/panels/WiiBridgePanel.h"
 #endif
@@ -154,7 +157,53 @@ WiimoteInputPanel::WiimoteInputPanel(wxWindow* parent)
 	//////////////////////////////////////////////////////////////////
 
 	main_sizer->Add(m_item_sizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 5);
-	
+
+	// fork: the pointer (IR camera) as bindings, after Dolphin's Point group. A real Wii Remote's own
+	// IR wins while it sees the sensor bar.
+	{
+		using W = WiimoteController;
+		const auto label = [](W::ButtonId id) { return wxGetTranslation(wxString::FromUTF8(W::get_button_name(id))); };
+		auto* pointer_row = new wxBoxSizer(wxHORIZONTAL);
+		auto* group = create_group(this, _("Pointer (IR)"), {
+			{W::kButtonId_Pointer_Up, label(W::kButtonId_Pointer_Up)}, {W::kButtonId_Pointer_Down, label(W::kButtonId_Pointer_Down)},
+			{W::kButtonId_Pointer_Left, label(W::kButtonId_Pointer_Left)}, {W::kButtonId_Pointer_Right, label(W::kButtonId_Pointer_Right)},
+			{W::kButtonId_Pointer_Hide, label(W::kButtonId_Pointer_Hide)}, {W::kButtonId_Pointer_Recenter, label(W::kButtonId_Pointer_Recenter)},
+		}, true);
+		group->GetStaticBox()->SetToolTip(_("Where the Wii Remote points on the TV. Default with the Mouse device: the cursor over the TV window. A real Wii Remote's IR camera wins while it sees the sensor bar."));
+		group->Add(create_clear_button(group->GetStaticBox(), {W::kButtonId_Pointer_Up, W::kButtonId_Pointer_Down, W::kButtonId_Pointer_Left, W::kButtonId_Pointer_Right, W::kButtonId_Pointer_Hide, W::kButtonId_Pointer_Recenter}, _("the pointer")), 0, wxALL, 4);
+		pointer_row->Add(group, 1, wxEXPAND | wxALL, 4);
+
+		auto* settings = new wxStaticBoxSizer(wxVERTICAL, this, _("Pointer settings"));
+		auto* parent = settings->GetStaticBox();
+		auto* grid = new wxFlexGridSizer(2, 4, 6);
+		grid->AddGrowableCol(1, 1);
+		const auto slider = [&](const wxString& text, int min, int max, int value, const wxString& tip) {
+			grid->Add(new wxStaticText(parent, wxID_ANY, text), 0, wxALIGN_CENTER_VERTICAL);
+			auto* s = new wxSlider(parent, wxID_ANY, value, min, max, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL | wxSL_VALUE_LABEL);
+			s->SetMinSize(wxSize(FromDIP(140), -1));
+			s->SetToolTip(tip);
+			s->Bind(wxEVT_SLIDER, &WiimoteInputPanel::on_pointer_setting, this);
+			grid->Add(s, 1, wxEXPAND);
+			return s;
+		};
+		m_pointer_center_x = slider(_("Center X %"), -100, 100, 0, _("Moves the pointer's centre (percent of half the screen)."));
+		m_pointer_center_y = slider(_("Center Y %"), -100, 100, 0, _("Moves the pointer's centre (percent of half the screen)."));
+		m_pointer_width = slider(_("Width %"), 5, 400, 100, _("100: the binding's full range covers the screen width."));
+		m_pointer_height = slider(_("Height %"), 5, 400, 100, _("100: the binding's full range covers the screen height."));
+		settings->Add(grid, 0, wxEXPAND | wxALL, 4);
+		m_pointer_relative = new wxCheckBox(parent, wxID_ANY, _("Relative input"));
+		m_pointer_relative->SetToolTip(_("The binding moves the pointer (a stick: a full deflection crosses the screen in a second) instead of placing it. \"recenter\" puts it back in the middle."));
+		m_pointer_relative->Bind(wxEVT_CHECKBOX, &WiimoteInputPanel::on_pointer_setting, this);
+		settings->Add(m_pointer_relative, 0, wxALL, 4);
+		m_pointer_auto_hide = new wxCheckBox(parent, wxID_ANY, _("Auto-hide (2 s without movement)"));
+		m_pointer_auto_hide->Bind(wxEVT_CHECKBOX, &WiimoteInputPanel::on_pointer_setting, this);
+		settings->Add(m_pointer_auto_hide, 0, wxALL, 4);
+		m_pointer = new wxPointerBox(parent, 16.0f / 9.0f, true);
+		settings->Add(m_pointer, 0, wxEXPAND | wxALL, 4);
+		pointer_row->Add(settings, 1, wxEXPAND | wxALL, 4);
+		main_sizer->Add(pointer_row, 0, wxEXPAND | wxLEFT | wxRIGHT, 5);
+	}
+
 	SetSizer(main_sizer);
 	Layout();
 }
@@ -207,6 +256,31 @@ void WiimoteInputPanel::set_active_device_type(WPADDeviceType type)
 	}
 }
 
+void WiimoteInputPanel::on_pointer_setting(wxCommandEvent& event)
+{
+	const auto wiimote = std::dynamic_pointer_cast<WiimoteController>(m_controller);
+	if (!wiimote)
+		return;
+	WiimoteController::PointerSettings settings;
+	settings.center_x = m_pointer_center_x->GetValue() / 100.0f;
+	settings.center_y = m_pointer_center_y->GetValue() / 100.0f;
+	settings.width = m_pointer_width->GetValue() / 100.0f;
+	settings.height = m_pointer_height->GetValue() / 100.0f;
+	settings.relative = m_pointer_relative->GetValue();
+	settings.auto_hide = m_pointer_auto_hide->GetValue();
+	wiimote->set_pointer_settings(settings);
+}
+
+void WiimoteInputPanel::show_pointer_settings(const WiimoteController::PointerSettings& settings)
+{
+	m_pointer_center_x->SetValue((int)std::lround(settings.center_x * 100));
+	m_pointer_center_y->SetValue((int)std::lround(settings.center_y * 100));
+	m_pointer_width->SetValue((int)std::lround(settings.width * 100));
+	m_pointer_height->SetValue((int)std::lround(settings.height * 100));
+	m_pointer_relative->SetValue(settings.relative);
+	m_pointer_auto_hide->SetValue(settings.auto_hide);
+}
+
 void WiimoteInputPanel::on_volume_change(wxCommandEvent& event)
 {
 }
@@ -243,6 +317,27 @@ void WiimoteInputPanel::on_timer(const EmulatedControllerPtr& emulated_controlle
 	{
 		const auto axis = emulated_controller->get_axis();
 		m_draw->SetAxisValue(axis);
+
+		// the pointer the game gets (a real Wii Remote's IR, else the bindings)
+		const auto wiimote = std::static_pointer_cast<WiimoteController>(emulated_controller);
+		const auto sample = wiimote->get_kpad_pointer();
+		const auto bindings = wiimote->get_pointer();
+		wxPointerBox::State state;
+		if (sample.visibility != PositionVisibility::NONE)
+		{
+			state.has_point = state.pressed = true;
+			state.x = sample.position.x;
+			state.y = sample.position.y;
+		}
+		else if (bindings.bound)
+		{
+			state.has_point = true; // hidden: hollow
+			state.x = bindings.position.x;
+			state.y = bindings.position.y;
+		}
+		m_pointer->SetState(state);
+		m_pointer->SetCaption(!bindings.bound && sample.visibility == PositionVisibility::NONE ? _("not bound")
+			: sample.visibility == PositionVisibility::NONE ? _("hidden") : wxString());
 	}
 }
 
@@ -254,5 +349,6 @@ void WiimoteInputPanel::load_controller(const EmulatedControllerPtr& emulated_co
 		const auto wiimote = std::dynamic_pointer_cast<WiimoteController>(emulated_controller);
 		wxASSERT(wiimote);
 		set_active_device_type(wiimote->get_device_type());
+		show_pointer_settings(wiimote->get_pointer_settings());
 	}
 }

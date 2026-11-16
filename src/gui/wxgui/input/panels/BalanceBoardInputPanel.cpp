@@ -10,7 +10,7 @@
 #include <wx/checkbox.h>
 
 #include "wxgui/helpers/wxHelpers.h"
-#include "wxgui/components/wxInputDraw.h"
+#include "wxgui/input/LiveIndicators.h"
 
 #ifdef HAS_IOBLUETOOTH
 #include "input/api/Wiimote/darwin/IOBluetoothWiimote.h"
@@ -80,7 +80,8 @@ BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 	// balance stick
 	row = 0;
 	column += 3;
-	text = new wxStaticText(this, wxID_ANY, _("Balance"));
+	text = new wxStaticText(this, wxID_ANY, _("Centre of balance"));
+	text->SetToolTip(_("Where the weight is (like a stick). Default with the Mouse device: the cursor over the TV window (up is the front). Clear it, or bind keys or a stick, so the mouse doesn't shift the weight."));
 	text->SetFont(bold_font);
 	m_item_sizer->Add(text, wxGBPosition(row, column), wxGBSpan(1, 2), wxALL | wxEXPAND, 5);
 	for (const auto id : {BalanceBoardController::kButtonId_Balance_Up, BalanceBoardController::kButtonId_Balance_Down,
@@ -88,8 +89,11 @@ BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 	{
 		add_button_row(++row, column, id);
 	}
-	m_draw = new wxInputDraw(this, wxID_ANY, wxDefaultPosition, {60, 60});
+	m_draw = new wxPointerBox(this, 1.0f, true);
 	m_item_sizer->Add(m_draw, wxGBPosition(++row, column + 1), wxGBSpan(2, 1), wxTOP | wxBOTTOM | wxALIGN_CENTER, 5);
+	m_item_sizer->Add(create_clear_button(this, {BalanceBoardController::kButtonId_Balance_Up, BalanceBoardController::kButtonId_Balance_Down,
+		BalanceBoardController::kButtonId_Balance_Left, BalanceBoardController::kButtonId_Balance_Right}, _("the centre of balance")),
+		wxGBPosition(row, column), wxDefaultSpan, wxALL | wxALIGN_TOP, 5);
 
 	m_item_sizer->Add(new wxStaticLine(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVERTICAL), wxGBPosition(0, column + 2), wxGBSpan(8, 1), wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 5);
 
@@ -235,6 +239,7 @@ void BalanceBoardInputPanel::on_timer(const EmulatedControllerPtr& emulated_cont
 	// device isn't a connected board), then the live values of that source
 	const auto source = board->get_source_info();
 	const bool real_source = source.source == BalanceBoardController::Source::Real;
+	m_draw->SetCaption(wxString());
 	if (real_source)
 	{
 		// a real board is the source: its own load cells, converted with its own calibration
@@ -251,18 +256,20 @@ void BalanceBoardInputPanel::on_timer(const EmulatedControllerPtr& emulated_cont
 				sensors[i] = kg[i] = BalanceBoardMath::RawToKg(cal, i, real.data.raw[i], cal.raw[i][0]);
 			double x, y;
 			BalanceBoardMath::SensorsToCenterOfBalance(sensors, x, y);
-			m_draw->SetAxisValue({(float)x, (float)y});
+			show_balance(true, (float)x, (float)y);
 			label += wxString::Format(_("\nTotal %.1f kg (TL %.1f  TR %.1f  BL %.1f  BR %.1f)  Temperature %d  Battery 0x%02x (level %d/4)%s"),
 				kg[0] + kg[1] + kg[2] + kg[3], kg[BalanceBoardMath::kTopLeft], kg[BalanceBoardMath::kTopRight],
 				kg[BalanceBoardMath::kBottomLeft], kg[BalanceBoardMath::kBottomRight], (int)(sint8)real.data.temperature,
 				real.data.battery, BalanceBoardMath::BatteryRawToLevel(real.data.battery), (board->is_a_down() ? _("  Power pressed") : wxString()));
 		}
 		else
-			m_draw->SetAxisValue({});
+			show_balance(false, 0, 0);
 	}
 	else
 	{
-		m_draw->SetAxisValue(board->get_axis());
+		const auto axis = board->get_axis();
+		show_balance(true, axis.x, axis.y);
+		m_draw->SetCaption(board->is_balance_mapped() ? wxString() : _("not bound: centred"));
 
 		const auto raw = board->get_sensor_values();
 		double kg[BalanceBoardMath::kSensorCount];
@@ -290,6 +297,16 @@ void BalanceBoardInputPanel::on_timer(const EmulatedControllerPtr& emulated_cont
 		if (relayout)
 			Layout();
 	}
+}
+
+void BalanceBoardInputPanel::show_balance(bool has_point, float x, float y)
+{
+	wxPointerBox::State state;
+	state.has_point = has_point;
+	state.pressed = has_point;
+	state.x = (std::clamp(x, -1.0f, 1.0f) + 1.0f) * 0.5f;
+	state.y = (1.0f - std::clamp(y, -1.0f, 1.0f)) * 0.5f;
+	m_draw->SetState(state);
 }
 
 void BalanceBoardInputPanel::load_controller(const EmulatedControllerPtr& emulated_controller)
