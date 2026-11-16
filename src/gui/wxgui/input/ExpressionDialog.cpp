@@ -12,6 +12,7 @@
 #include <wx/settings.h>
 
 #include "input/api/Controller.h"
+#include "input/ControllerFactory.h"
 #include "wxgui/input/InputDetector.h"
 
 ExpressionDialog::ExpressionDialog(wxWindow* parent, const EmulatedControllerPtr& controller, uint64 mapping, const wxString& control_name)
@@ -20,7 +21,7 @@ ExpressionDialog::ExpressionDialog(wxWindow* parent, const EmulatedControllerPtr
 {
 	auto* sizer = new wxBoxSizer(wxVERTICAL);
 
-	auto* help = new wxStaticText(this, wxID_ANY, _("Inputs are written `Device:Input` (pick them below). Operators: | (either), & (both), ! (not), ^, + - * /, < >, parentheses.\nFunctions: min, max, clamp, abs, deadzone(x, dz), toggle(x), hold(x, seconds), pulse(x, seconds), timer(seconds).\nA button is pressed while the result is active (an input pressed, or a computed value above 0.5); sticks and triggers use the value."));
+	auto* help = new wxStaticText(this, wxID_ANY, _("Inputs are written `Input` (this controller's device) or `Device:Input` (another device, explicitly: an advanced, deliberate choice). Pick them below. Operators: | (either), & (both), ! (not), ^, + - * /, < >, parentheses.\nFunctions: min, max, clamp, abs, deadzone(x, dz), toggle(x), hold(x, seconds), pulse(x, seconds), timer(seconds).\nA button is pressed while the result is active (an input pressed, or a computed value above 0.5); sticks and triggers use the value."));
 	help->Wrap(FromDIP(620));
 	sizer->Add(help, 0, wxALL, 8);
 
@@ -39,40 +40,33 @@ ExpressionDialog::ExpressionDialog(wxWindow* parent, const EmulatedControllerPtr
 	auto* insert_sizer = new wxBoxSizer(wxHORIZONTAL);
 	auto* left = new wxBoxSizer(wxVERTICAL);
 	m_devices = new wxChoice(this, wxID_ANY);
-	for (const auto& c : controller->get_controllers())
-		m_devices->Append(wxString::FromUTF8(fmt::format("{} [{}]", c->display_name(), c->api_name())));
-	if (m_devices->GetCount() > 0)
-		m_devices->SetSelection(0);
+	fill_devices();
 	m_devices->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { fill_inputs(); });
 	left->Add(m_devices, 0, wxEXPAND | wxBOTTOM, 4);
 	m_inputs = new wxListBox(this, wxID_ANY, wxDefaultPosition, FromDIP(wxSize(260, 150)));
 	m_inputs->Bind(wxEVT_LISTBOX_DCLICK, [this](wxCommandEvent&) {
 		const int sel = m_inputs->GetSelection();
 		const int dev = m_devices->GetSelection();
-		const auto& devices = m_controller->get_controllers();
-		if (sel == wxNOT_FOUND || dev == wxNOT_FOUND || dev >= (int)devices.size())
+		if (sel == wxNOT_FOUND || dev == wxNOT_FOUND || dev >= (int)m_device_list.size())
 			return;
-		const auto& c = devices[dev];
-		const auto name = c->get_button_name(m_input_ids[sel]);
-		insert(wxString::FromUTF8(InputExpr::quote_input(fmt::format("{}/{}", InputAPI::to_string(c->api()), c->uuid()), name)));
+		insert(input_text(m_device_list[dev], m_input_ids[sel]));
 	});
 	left->Add(m_inputs, 1, wxEXPAND);
 	insert_sizer->Add(left, 1, wxEXPAND | wxRIGHT, 8);
 
 	auto* ops = new wxBoxSizer(wxVERTICAL);
 	auto* detect = new wxButton(this, wxID_ANY, _("Detect input"));
-	detect->SetToolTip(_("Press an input on any device within 3 s; it is inserted at the cursor."));
+	detect->SetToolTip(_("Press an input on any device within 3 s; it is inserted at the cursor (another device than this controller's is written with its name)."));
 	detect->Bind(wxEVT_BUTTON, [this, detect](wxCommandEvent&) {
 		auto* detector = InputDetector::Get();
 		if (!detector)
 			return;
 		detect->SetLabel(_("Press an input..."));
 		detector->start_for_input(m_controller,
-			[this](const ControllerPtr& c, uint64 input) {
-				insert(wxString::FromUTF8(InputExpr::quote_input(fmt::format("{}/{}", InputAPI::to_string(c->api()), c->uuid()), c->get_button_name(input))));
-			},
+			[this](const ControllerPtr& c, uint64 input) { insert(input_text(c, input)); },
 			[this, detect](const InputDetector::Result& result) {
 				detect->SetLabel(_("Detect input"));
+				fill_devices();
 				fill_inputs();
 				if (!result.message.empty())
 					m_status->SetLabel(wxString::FromUTF8(result.message));
@@ -137,38 +131,59 @@ std::string ExpressionDialog::get_expression() const
 	return m_text->GetValue().utf8_string();
 }
 
+wxString ExpressionDialog::input_text(const ControllerPtr& device, uint64 input) const
+{
+	const auto selected = m_controller->get_device();
+	const auto name = device->get_button_name(input);
+	if (selected && *selected == *device)
+		return wxString::FromUTF8(InputExpr::quote_input({}, name));
+	return wxString::FromUTF8(InputExpr::quote_input(fmt::format("{}/{}", InputAPI::to_string(device->api()), device->uuid()), name));
+}
+
+void ExpressionDialog::fill_devices()
+{
+	// the controller's device, the devices bindings name, and Keyboard/Mouse
+	std::vector<ControllerPtr> list;
+	const auto add = [&](const ControllerPtr& c) {
+		if (c && std::none_of(list.cbegin(), list.cend(), [&](const ControllerPtr& l) { return *l == *c; }))
+			list.push_back(c);
+	};
+	const auto selected = m_controller->get_device();
+	add(selected);
+	for (const auto& c : m_controller->get_extra_devices())
+		add(c);
+	try
+	{
+		add(ControllerFactory::CreateController(InputAPI::Keyboard, "keyboard", "Keyboard/Mouse"));
+	}
+	catch (const std::exception&)
+	{
+	}
+	if (list.size() == m_device_list.size() && std::equal(list.cbegin(), list.cend(), m_device_list.cbegin(), [](const auto& a, const auto& b) { return *a == *b; }))
+		return;
+	const int sel = m_devices->GetSelection();
+	m_device_list = std::move(list);
+	m_devices->Clear();
+	for (const auto& c : m_device_list)
+	{
+		const bool is_selected = selected && *selected == *c;
+		m_devices->Append(wxString::FromUTF8(is_selected ? fmt::format("{} (this controller's device)", c->display_name())
+			: fmt::format("{} [{}] (explicit)", c->display_name(), c->api_name())));
+	}
+	m_devices->SetSelection(sel == wxNOT_FOUND || sel >= (int)m_device_list.size() ? 0 : sel);
+}
+
 void ExpressionDialog::fill_inputs()
 {
-	// the device list may have grown (detect adds devices)
-	const auto& devices = m_controller->get_controllers();
-	if (m_devices->GetCount() != devices.size())
-	{
-		const int sel = m_devices->GetSelection();
-		m_devices->Clear();
-		for (const auto& c : devices)
-			m_devices->Append(wxString::FromUTF8(fmt::format("{} [{}]", c->display_name(), c->api_name())));
-		m_devices->SetSelection(sel == wxNOT_FOUND && !devices.empty() ? 0 : sel);
-	}
-
 	m_inputs->Clear();
 	m_input_ids.clear();
 	const int dev = m_devices->GetSelection();
-	if (dev == wxNOT_FOUND || dev >= (int)devices.size())
+	if (dev == wxNOT_FOUND || dev >= (int)m_device_list.size())
 		return;
-	const auto& c = devices[dev];
+	const auto& c = m_device_list[dev];
 	const bool keyboard = c->api() == InputAPI::Keyboard;
 	const uint64 limit = keyboard ? 0x200 : kButtonMAX;
 	wxArrayString names;
-	if (c->api() == InputAPI::Mouse)
-	{
-		for (const auto id : MouseInputs::AllIds())
-		{
-			names.Add(wxString::FromUTF8(c->get_button_name(id)));
-			m_input_ids.emplace_back(id);
-		}
-		m_inputs->Append(names);
-		return;
-	}
 	for (uint64 id = 0; id < limit; ++id)
 	{
 		const auto name = c->get_button_name(id);
@@ -176,6 +191,15 @@ void ExpressionDialog::fill_inputs()
 			continue;
 		names.Add(wxString::FromUTF8(name));
 		m_input_ids.emplace_back(id);
+	}
+	if (keyboard)
+	{
+		// the mouse part of Keyboard/Mouse
+		for (const auto id : MouseInputs::AllIds())
+		{
+			names.Add(wxString::FromUTF8(c->get_button_name(MouseInputs::KeyboardId(id))));
+			m_input_ids.emplace_back(MouseInputs::KeyboardId(id));
+		}
 	}
 	m_inputs->Append(names);
 }

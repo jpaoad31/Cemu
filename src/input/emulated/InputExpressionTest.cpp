@@ -4,11 +4,13 @@
 //   P=build/vcpkg_installed/arm64-osx
 //   clang++ -std=c++20 -Wall -I src -I $P/include src/input/emulated/InputExpressionTest.cpp \
 //     src/input/emulated/InputExpression.cpp src/input/emulated/InputProfileBindings.cpp \
-//     src/input/emulated/MouseBindings.cpp $P/lib/libpugixml.a -o /tmp/exprtest && /tmp/exprtest
+//     src/input/emulated/MouseBindings.cpp src/input/emulated/SingleDeviceMigration.cpp \
+//     $P/lib/libpugixml.a -o /tmp/exprtest && /tmp/exprtest
 
 #include "input/emulated/InputExpression.h"
 #include "input/emulated/InputProfileBindings.h"
 #include "input/emulated/MouseBindings.h"
+#include "input/emulated/SingleDeviceMigration.h"
 #include "input/api/Mouse/MouseInputs.h"
 
 #include <pugixml.hpp>
@@ -41,6 +43,8 @@ struct FakeDevices : DeviceSet, InputSource
 	};
 	std::vector<Dev> devs;
 	std::map<std::pair<size_t, InputId>, float> values;
+	size_t def = kNoDevice; // the selected device
+	size_t default_device() const override { return def; }
 
 	FakeDevices()
 	{
@@ -127,7 +131,7 @@ static void test_parse_and_print()
 	CHECK(e.empty());
 
 	// errors keep the text
-	for (const char* bad : {"`Keyboard:A` |", "`Keyboard:A", "foo(`Keyboard:A`)", "min(`Keyboard:A`)", "`A`", "(`Keyboard:A`", "`Keyboard:A` $ 1", "Keyboard"})
+	for (const char* bad : {"`Keyboard:A` |", "`Keyboard:A", "foo(`Keyboard:A`)", "min(`Keyboard:A`)", "``", "`Keyboard:`", "(`Keyboard:A`", "`Keyboard:A` $ 1", "Keyboard"})
 	{
 		e = Expression::parse(bad, dev);
 		CHECK(!e.ok());
@@ -233,8 +237,9 @@ static void test_list_editing()
 	CHECK_EQ(e.leaves().size(), (size_t)2);
 	CHECK(e.references_device(2));
 	CHECK(!e.references_device(1));
-	CHECK_EQ(e.display(dev, false), std::string("X | Button 1"));
-	CHECK_EQ(e.display(dev, true), std::string("X [Keyboard] | Button 1 [Remote GamePad (UDP 26770)]"));
+	// no selected device: every input is written with its device and shown with it
+	CHECK_EQ(e.display(dev), std::string("X [Keyboard] | Button 1 [Remote GamePad (UDP 26770)]"));
+	CHECK(e.has_qualified_inputs());
 	auto r = Expression::remove_device(e, 0, dev);
 	CHECK_EQ(r.text(), std::string("`RemoteGamePad/26770:Button 1`"));
 	r = Expression::remove_device(r, 2, dev);
@@ -393,7 +398,7 @@ static void test_mouse_inputs()
 	CHECK(e.ok());
 	CHECK(e.warnings().empty());
 	CHECK_EQ(e.text(), std::string("`Mouse/mouse:GamePad Cursor X+` | `Mouse/mouse:Wheel Up`"));
-	CHECK_EQ(e.display(dev, true), std::string("GamePad Cursor X+ [Mouse] | Wheel Up [Mouse]"));
+	CHECK_EQ(e.display(dev), std::string("GamePad Cursor X+ [Mouse] | Wheel Up [Mouse]"));
 	CHECK(!Expression::parse("`Mouse:Cursor W`", dev).warnings().empty());
 
 	// analogue values: a half axis gives the deflection, the full axis is signed
@@ -523,6 +528,268 @@ static void test_mouse_conversion()
 	CHECK(InputProfile::BindingsVersion(in.document_element()) >= kBindingsVersion);
 }
 
+// one selected device per emulated controller: unqualified inputs are that device's
+static void test_default_device()
+{
+	FakeDevices dev;
+	dev.def = 2; // the Remote GamePad is the controller's device
+	auto e = Expression::parse("`Button 1` | `Keyboard/keyboard:X`", dev);
+	CHECK(e.ok());
+	CHECK(e.warnings().empty());
+	CHECK_EQ(e.leaves().size(), (size_t)2);
+	CHECK(!e.leaves()[0].qualified && e.leaves()[0].device == 2 && e.leaves()[0].input == InputId(1));
+	CHECK(e.leaves()[1].qualified && e.leaves()[1].device == 0 && e.leaves()[1].input == InputId(23));
+	CHECK_EQ(e.text(), std::string("`Button 1` | `Keyboard/keyboard:X`"));
+	CHECK_EQ(e.display(dev), std::string("Button 1 | X [Keyboard]"));
+	CHECK(e.has_qualified_inputs());
+	CHECK(!Expression::parse("`Button 1` | `button 2`", dev).has_qualified_inputs());
+	CHECK_EQ(Expression::parse("`button 2`", dev).text(), std::string("`Button 2`"));
+
+	// a qualifier naming the selected device stays as written (explicit)
+	e = Expression::parse("`RemoteGamePad:Button 2`", dev);
+	CHECK_EQ(e.text(), std::string("`RemoteGamePad/26770:Button 2`"));
+	CHECK_EQ(e.display(dev), std::string("Button 2 [Remote GamePad (UDP 26770)]"));
+
+	// evaluation: unqualified inputs read the selected device, qualified ones their own device
+	e = Expression::parse("`Button 1` | `Keyboard/keyboard:X`", dev);
+	CHECK(!e.active(dev));
+	dev.set(2, 1, 1);
+	CHECK(e.active(dev));
+	dev.clear();
+	dev.set(0, 23, 1);
+	CHECK(e.active(dev));
+	dev.clear();
+	dev.set(0, 1, 1); // the keyboard's "B": not this binding's Button 1
+	CHECK(!e.active(dev));
+	dev.clear();
+
+	// the same text against another selected device: `X` follows the device (Dolphin's model)
+	dev.def = 0;
+	e = Expression::parse("`X`", dev);
+	CHECK(e.warnings().empty() && e.leaves()[0].device == 0 && e.leaves()[0].input == InputId(23));
+	dev.def = 2;
+	e = Expression::parse("`X`", dev);
+	CHECK_EQ(e.warnings().size(), (size_t)1); // the Remote GamePad has no X
+	CHECK_EQ(e.display(dev), std::string("X (?)"));
+	CHECK_EQ(e.text(), std::string("`X`"));
+	dev.def = kNoDevice;
+	e = Expression::parse("`X`", dev);
+	CHECK_EQ(e.warnings().size(), (size_t)1);
+	CHECK(e.warnings()[0].find("no device selected") != std::string::npos);
+
+	// #id on the selected device prints as its name
+	dev.def = 0;
+	CHECK_EQ(Expression::parse("`#15`", dev).text(), std::string("`P`"));
+
+	// a text before ':' that isn't a device name is part of the input name
+	e = Expression::parse("`1:2`", dev);
+	CHECK(e.ok() && !e.leaves()[0].qualified);
+	CHECK_EQ(e.leaves()[0].input_text, std::string("1:2"));
+	CHECK(looks_like_device("Keyboard") && looks_like_device("RemoteGamePad/26770") && looks_like_device("SDLController/0_03ab"));
+	CHECK(!looks_like_device("1") && !looks_like_device("Key board") && !looks_like_device("Keyboard/") && !looks_like_device(""));
+
+	// list editing writes the selected device's inputs without a device, others with one
+	dev.def = 2;
+	auto l = Expression::append(Expression{}, 2, 3, dev);
+	CHECK_EQ(l.text(), std::string("`Button 3`"));
+	l = Expression::append(l, 0, 23, dev);
+	CHECK_EQ(l.text(), std::string("`Button 3` | `Keyboard/keyboard:X`"));
+	CHECK_EQ(Expression::from_input(2, 4, dev).text(), std::string("`Button 4`"));
+	CHECK_EQ(Expression::remove_device(l, 0, dev).text(), std::string("`Button 3`"));
+	size_t dropped = 0;
+	CHECK(Expression::remove_leaves(l, [](const Leaf&) { return true; }, dev, &dropped).empty());
+	CHECK_EQ(dropped, (size_t)2);
+
+	// operators and functions work the same with unqualified inputs
+	e = Expression::parse("toggle(`Button 5`) & !`Keyboard/keyboard:Space`", dev);
+	CHECK(e.ok());
+	CHECK_EQ(e.text(), std::string("toggle(`Button 5`) & !`Keyboard/keyboard:Space`"));
+}
+
+static void test_keyboard_mouse_names()
+{
+	using namespace MouseInputs;
+	for (const auto id : AllIds())
+	{
+		const auto kid = KeyboardId(id);
+		CHECK(IsKeyboardMouseId(kid));
+		CHECK(MouseIdOf(kid) == id);
+		CHECK(FromCombinedName(CombinedName(id)) == std::optional<uint64_t>(kid));
+	}
+	CHECK_EQ(CombinedName(Id(kGamePad, kLeft)), std::string("GamePad Mouse Left"));
+	CHECK_EQ(CombinedName(Id(kAny, kRight)), std::string("Mouse Right"));
+	CHECK_EQ(CombinedName(Id(kTV, kCursorYN)), std::string("TV Cursor Y-"));
+	CHECK_EQ(CombinedName(Id(kAny, kWheelUp)), std::string("Wheel Up"));
+	// key names don't collide: no "Left"/"Right" for the mouse buttons (arrow keys have those)
+	CHECK(!FromCombinedName("Left").has_value() && !FromCombinedName("Right").has_value());
+	CHECK(FromCombinedName("gamepad mouse left") == std::optional<uint64_t>(KeyboardId(Id(kGamePad, kLeft))));
+	// key codes stay below the mouse range (GDK key values < 0x11000000)
+	CHECK(!IsKeyboardMouseId(0x1008FFFF) && !IsKeyboardMouseId(49));
+	CHECK_EQ(MouseBindings::CombinedInputText(Id(kGamePad, kLeft)), std::string("`GamePad Mouse Left`"));
+	CHECK_EQ(MouseBindings::QualifiedMouseText(Id(kTV, kCursorXP)), std::string("`Keyboard/keyboard:TV Cursor X+`"));
+}
+
+using SingleDeviceMigration::ProfileDevice;
+
+static std::map<uint64_t, std::string> with_implicit_mouse(std::string_view type, std::map<uint64_t, std::string> bindings, bool has_wii_device, std::vector<ProfileDevice>& devices)
+{
+	const auto added = MouseBindings::ImplicitMouseBindings(type, bindings, has_wii_device);
+	if (!added.empty())
+		devices.push_back({"Mouse", "mouse", "Mouse"});
+	for (const auto& [id, text] : added)
+		bindings[id] = text;
+	return bindings;
+}
+
+static void test_migration()
+{
+	using namespace SingleDeviceMigration;
+	using namespace MouseBindings;
+	const ProfileDevice keyboard{"Keyboard", "keyboard", "Keyboard"};
+	const ProfileDevice remote{"RemoteGamePad", "26770", "Remote GamePad (UDP 26770)"};
+	const ProfileDevice wiimote{"Wiimote", "0", "Controller 1"};
+	const ProfileDevice sdl{"SDLController", "0_030000005e040000", "Xbox Controller"};
+	const ProfileDevice dsu{"DSUController", "0", "Controller 1"};
+
+	// the user's controller0: Keyboard (no bindings) + Remote GamePad (version 1 bindings) + the
+	// mouse's implicit touch and tilt -> the Remote GamePad, the mouse's 12 bindings dropped
+	{
+		std::vector<ProfileDevice> devices{keyboard, remote};
+		std::map<uint64_t, std::string> bindings{{1, "`RemoteGamePad/26770:A`"}, {17, "`RemoteGamePad/26770:Y-Axis+`"}, {27, "`RemoteGamePad/26770:Home`"}};
+		bindings = with_implicit_mouse(kTypeGamePad, bindings, false, devices);
+		CHECK_EQ(devices.size(), (size_t)3);
+		CHECK_EQ(bindings.size(), (size_t)15);
+		CHECK(ChooseDevice(devices, bindings) == std::optional<size_t>(1));
+		const auto r = Migrate(devices, bindings);
+		CHECK(r.device.has_value() && r.device->api == "RemoteGamePad" && r.device->uuid == "26770");
+		CHECK_EQ(r.bindings.size(), (size_t)3);
+		CHECK_EQ(r.bindings.at(1), std::string("`A`"));
+		CHECK_EQ(r.bindings.at(17), std::string("`Y-Axis+`"));
+		CHECK(!r.bindings.contains(kTouchPress) && !r.bindings.contains(kTiltHold));
+		CHECK_EQ(r.dropped.size(), (size_t)1);
+		CHECK_EQ(r.dropped[0].device, std::string("Keyboard/Mouse"));
+		CHECK_EQ(r.dropped[0].inputs, (size_t)12);
+		CHECK_EQ(r.dropped_inputs(), (size_t)12);
+		CHECK_EQ(Note(r), std::string("Bindings from Keyboard/Mouse (12) were removed: one device per controller."));
+		// the result loads against the real devices without warnings
+		FakeDevices dev;
+		dev.devs[2].inputs = {{0, "A"}, {10, "Home"}, {40, "Y-Axis+"}};
+		dev.def = 2;
+		for (const auto& [id, text] : r.bindings)
+		{
+			const auto e = Expression::parse(text, dev);
+			CHECK(e.ok() && e.warnings().empty() && !e.has_qualified_inputs());
+		}
+	}
+
+	// a Wii Remote controller with Keyboard + a real Wii Remote: the Wii Remote, Space dropped
+	{
+		const std::vector<ProfileDevice> devices{keyboard, wiimote};
+		const std::map<uint64_t, std::string> bindings{{17, "`Keyboard/keyboard:Space`"}, {1, "`Wiimote/0:A` | `Keyboard/keyboard:X`"}};
+		const auto r = Migrate(devices, bindings);
+		CHECK(r.device && r.device->api == "Wiimote");
+		CHECK_EQ(r.bindings.size(), (size_t)1);
+		CHECK_EQ(r.bindings.at(1), std::string("`A`"));
+		CHECK_EQ(r.dropped_inputs(), (size_t)2);
+		CHECK_EQ(Note(r), std::string("Bindings from Keyboard/Mouse (2) were removed: one device per controller."));
+	}
+
+	// the Balance Board with Keyboard (P, 6) + a Wii Remote (the white-screen case): the Wii device
+	// is kept (the board panel then warns that it isn't a board), the keys are dropped
+	{
+		std::vector<ProfileDevice> devices{keyboard, wiimote};
+		std::map<uint64_t, std::string> bindings{{1, "`Keyboard/keyboard:P` | `Wiimote/0:A`"}, {6, "`Keyboard/keyboard:6`"}};
+		bindings = with_implicit_mouse(kTypeBoard, bindings, true, devices); // a Wii device: no mouse balance
+		CHECK_EQ(devices.size(), (size_t)2);
+		const auto r = Migrate(devices, bindings);
+		CHECK(r.device && r.device->api == "Wiimote" && r.device->uuid == "0");
+		CHECK_EQ(r.bindings.size(), (size_t)1);
+		CHECK_EQ(r.bindings.at(1), std::string("`A`"));
+		CHECK_EQ(r.dropped_inputs(), (size_t)2);
+	}
+
+	// single device profiles convert 1:1: the keyboard alone, and the keyboard + the mouse (one
+	// device now: the mouse's names change, nothing is dropped)
+	{
+		std::vector<ProfileDevice> devices{keyboard};
+		std::map<uint64_t, std::string> bindings{{1, "`Keyboard/keyboard:P`"}, {6, "`Keyboard/keyboard:#22`"}};
+		bindings = with_implicit_mouse(kTypeBoard, bindings, false, devices);
+		CHECK_EQ(devices.size(), (size_t)2);
+		const auto r = Migrate(devices, bindings);
+		CHECK(r.device && r.device->api == "Keyboard" && r.device->display_name == "Keyboard/Mouse");
+		CHECK_EQ(r.bindings.size(), (size_t)6);
+		CHECK_EQ(r.bindings.at(1), std::string("`P`"));
+		CHECK_EQ(r.bindings.at(6), std::string("`#22`"));
+		CHECK_EQ(r.bindings.at(kBalanceUp), std::string("`TV Cursor Y-`"));
+		CHECK(r.dropped.empty());
+		CHECK(Note(r).empty());
+		// `#22` becomes the key's name against the real keyboard
+		FakeDevices dev;
+		dev.def = 0;
+		CHECK_EQ(Expression::parse(r.bindings.at(6), dev).text(), std::string("`W`"));
+	}
+	{
+		const std::vector<ProfileDevice> devices{remote};
+		const auto r = Migrate(devices, {{1, "`RemoteGamePad/26770:A`"}});
+		CHECK(r.device && r.device->api == "RemoteGamePad");
+		CHECK_EQ(r.bindings.at(1), std::string("`A`"));
+		CHECK(r.dropped.empty());
+	}
+	// a version 2 profile with the separate Mouse device: GamePad window clicks become Keyboard/Mouse
+	// inputs; the mouse alone is Keyboard/Mouse too
+	{
+		const std::vector<ProfileDevice> devices{{"Mouse", "mouse", "Mouse"}};
+		const auto r = Migrate(devices, {{kTouchPress, "`Mouse/mouse:GamePad Left`"}, {kTiltHold, "`Mouse/mouse:#1`"}});
+		CHECK(r.device && r.device->api == "Keyboard" && r.device->uuid == "keyboard");
+		CHECK_EQ(r.bindings.at(kTouchPress), std::string("`GamePad Mouse Left`"));
+		CHECK_EQ(r.bindings.at(kTiltHold), std::string("`Mouse Right`"));
+	}
+
+	// the main device: the non-keyboard device with the most inputs, then Remote GamePad > Wii > others
+	{
+		const std::vector<ProfileDevice> devices{keyboard, sdl, dsu};
+		const std::map<uint64_t, std::string> bindings{{1, "`Keyboard/keyboard:X` | `DSUController/0:a`"}, {2, "`Keyboard/keyboard:Z`"}};
+		CHECK(ChooseDevice(devices, bindings) == std::optional<size_t>(2));
+		CHECK(ChooseDevice({keyboard, sdl, remote}, {}) == std::optional<size_t>(2));
+		CHECK(ChooseDevice({keyboard, sdl}, {{1, "`Keyboard/keyboard:X`"}}) == std::optional<size_t>(1)); // a pad without bindings still wins over the keyboard
+		CHECK(ChooseDevice({keyboard, {"Mouse", "mouse", "Mouse"}}, {}) == std::optional<size_t>(0));
+		CHECK(!ChooseDevice({}, {}).has_value());
+		const auto r = Migrate(devices, bindings);
+		CHECK(r.device && r.device->api == "DSUController");
+		CHECK_EQ(r.bindings.at(1), std::string("`a`"));
+		CHECK(!r.bindings.contains(2));
+		CHECK_EQ(r.dropped.size(), (size_t)2); // Keyboard/Mouse (2), the SDL pad (0)
+		CHECK_EQ(Note(r), std::string("Bindings from Keyboard/Mouse (2) were removed: one device per controller."));
+	}
+
+	// advanced expressions are kept whole: other devices stay explicit, the mouse becomes Keyboard/Mouse
+	{
+		const std::vector<ProfileDevice> devices{keyboard, remote, {"Mouse", "mouse", "Mouse"}};
+		const std::map<uint64_t, std::string> bindings{
+			{1, "`Keyboard/keyboard:A` & `RemoteGamePad/26770:B`"},
+			{kTouchPress, "`Mouse/mouse:GamePad Left` & !`RemoteGamePad/26770:ZL`"},
+			{2, "toggle(`RemoteGamePad/26770:X`)"},
+			{3, "`Keyboard/keyboard:A` |"}, // doesn't parse: kept as text
+		};
+		const auto r = Migrate(devices, bindings);
+		CHECK(r.device && r.device->api == "RemoteGamePad");
+		CHECK_EQ(r.bindings.at(1), std::string("`Keyboard/keyboard:A` & `B`"));
+		CHECK_EQ(r.bindings.at(kTouchPress), std::string("`Keyboard/keyboard:GamePad Mouse Left` & !`ZL`"));
+		CHECK_EQ(r.bindings.at(2), std::string("toggle(`X`)"));
+		CHECK_EQ(r.bindings.at(3), std::string("`Keyboard/keyboard:A` |"));
+		CHECK_EQ(r.advanced_kept, (size_t)2);
+		CHECK_EQ(r.dropped_inputs(), (size_t)0);
+		CHECK(Note(r).empty());
+	}
+
+	// inputs of a device that isn't in the profile are dropped from lists too
+	{
+		const auto r = Migrate({remote}, {{1, "`RemoteGamePad/26770:A` | `SDLController/9_ff:b`"}});
+		CHECK_EQ(r.bindings.at(1), std::string("`A`"));
+		CHECK_EQ(r.dropped_inputs(), (size_t)1);
+	}
+}
+
 int main()
 {
 	test_parse_and_print();
@@ -531,6 +798,9 @@ int main()
 	test_profile();
 	test_mouse_inputs();
 	test_mouse_conversion();
+	test_default_device();
+	test_keyboard_mouse_names();
+	test_migration();
 	if (g_failures)
 	{
 		std::printf("%d failure(s)\n", g_failures);

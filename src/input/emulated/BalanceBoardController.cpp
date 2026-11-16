@@ -66,9 +66,6 @@ std::vector<std::pair<uint64, uint64>> BalanceBoardController::get_default_mappi
 		};
 		break;
 #endif
-	case InputAPI::Mouse:
-		mapping = MouseBindings::MouseDefaults(MouseBindings::kTypeBoard);
-		break;
 	case InputAPI::XInput:
 		mapping =
 		{
@@ -155,17 +152,13 @@ BalanceBoardController::RealBoard BalanceBoardController::get_real_board() const
 {
 	RealBoard result{};
 #ifdef SUPPORTS_WIIMOTE
+	// the source follows the selected device: a Wii device -> the real board (with the fallback
+	// below when it isn't one or isn't connected), anything else -> the emulated board
 	std::shared_ptr<NativeWiimoteController> wiimote;
 	{
 		std::shared_lock lock(m_mutex);
-		for (const auto& controller : m_controllers)
-		{
-			if (controller->api() != InputAPI::Wiimote)
-				continue;
-			wiimote = std::dynamic_pointer_cast<NativeWiimoteController>(controller);
-			if (wiimote)
-				break;
-		}
+		if (m_device && m_device->api() == InputAPI::Wiimote)
+			wiimote = std::dynamic_pointer_cast<NativeWiimoteController>(m_device);
 	}
 	if (!wiimote)
 		return result;
@@ -222,7 +215,7 @@ BalanceBoardController::SourceInfo BalanceBoardController::get_source_info() con
 		info.source = Source::EmulatedFallback;
 		info.warning = true;
 		if (real.connected && !real.is_board)
-			info.text = fmt::format("Using the emulated board: {} is not a Balance Board. Remove it from this controller.", name);
+			info.text = fmt::format("Using the emulated board: {} is not a Balance Board. Choose the board (or Keyboard/Mouse) as this controller's device.", name);
 		else
 			info.text = fmt::format("Using the emulated board: the real board {} is not connected. It takes over when it connects.", name);
 		return info;
@@ -246,11 +239,8 @@ void BalanceBoardController::send_real_command(uint8 command)
 	std::shared_ptr<NativeWiimoteController> wiimote;
 	{
 		std::shared_lock lock(m_mutex);
-		for (const auto& controller : m_controllers)
-		{
-			if (controller->api() == InputAPI::Wiimote && (wiimote = std::dynamic_pointer_cast<NativeWiimoteController>(controller)))
-				break;
-		}
+		if (m_device && m_device->api() == InputAPI::Wiimote)
+			wiimote = std::dynamic_pointer_cast<NativeWiimoteController>(m_device);
 	}
 	if (wiimote && wiimote->is_connected())
 		wiimote->send_balance_board_command(command);

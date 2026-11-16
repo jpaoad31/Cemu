@@ -2,6 +2,9 @@
 
 #include "input/api/Controller.h"
 #include "input/api/Mouse/MouseInputs.h"
+#include "input/emulated/MouseBindings.h"
+#include "input/ControllerFactory.h"
+#include "input/InputPresets.h"
 
 #ifdef SUPPORTS_WIIMOTE
 #include "input/api/Wiimote/NativeWiimoteController.h"
@@ -87,14 +90,15 @@ void EmulatedController::controllers_read_done()
 	}
 }
 
+// The device's own data (rumble, battery, motion, pointer/touch position) comes from the selected
+// device only: devices named explicitly in bindings only give their inputs.
+
 void EmulatedController::start_rumble()
 {
 	m_rumble = true;
 	std::shared_lock lock(m_mutex);
-	for (const auto& controller : m_controllers)
-	{
-		controller->start_rumble();
-	}
+	if (m_device)
+		m_device->start_rumble();
 }
 
 void EmulatedController::stop_rumble()
@@ -105,140 +109,95 @@ void EmulatedController::stop_rumble()
 	m_rumble = false;
 
 	std::shared_lock lock(m_mutex);
-	for (const auto& controller : m_controllers)
-	{
-		controller->stop_rumble();
-	}
+	if (m_device)
+		m_device->stop_rumble();
 }
 
 bool EmulatedController::is_battery_low() const
 {
 	std::shared_lock lock(m_mutex);
-	return std::any_of(m_controllers.cbegin(), m_controllers.cend(), [](const auto& c) {return c->has_low_battery(); });
+	return m_device && m_device->has_low_battery();
 }
 
 bool EmulatedController::has_motion() const
 {
 	std::shared_lock lock(m_mutex);
-	return std::any_of(m_controllers.cbegin(), m_controllers.cend(), [](const auto& c) {return c->use_motion(); });
+	return m_device && m_device->use_motion();
 }
 
 MotionSample EmulatedController::get_motion_data() const
 {
 	std::shared_lock lock(m_mutex);
-	for (const auto& controller : m_controllers)
-	{
-		if (controller->use_motion())
-			return controller->get_motion_sample();
-	}
-
+	if (m_device && m_device->use_motion())
+		return m_device->get_motion_sample();
 	return {};
 }
 
 bool EmulatedController::has_second_motion() const
 {
-	int motion = 0;
+	// a Wii Remote's Nunchuk
+#ifdef SUPPORTS_WIIMOTE
 	std::shared_lock lock(m_mutex);
-	for(const auto& controller : m_controllers)
-	{
-		if(controller->use_motion())
-		{
-			// if wiimote has nunchuck connected, we use its acceleration
-            #if SUPPORTS_WIIMOTE
-            if(controller->api() == InputAPI::Wiimote)
-			{
-				if(((NativeWiimoteController*)controller.get())->get_extension() == NativeWiimoteController::Nunchuck)
-				{
-					return true;
-				}
-			}
-            #endif
-			motion++;
-		}
-	}
-
-	return motion >= 2;
+	if (m_device && m_device->use_motion() && m_device->api() == InputAPI::Wiimote)
+		return ((NativeWiimoteController*)m_device.get())->get_extension() == NativeWiimoteController::Nunchuck;
+#endif
+	return false;
 }
 
 MotionSample EmulatedController::get_second_motion_data() const
 {
-	int motion = 0;
+#ifdef SUPPORTS_WIIMOTE
 	std::shared_lock lock(m_mutex);
-	for (const auto& controller : m_controllers)
+	if (m_device && m_device->use_motion() && m_device->api() == InputAPI::Wiimote)
 	{
-		if (controller->use_motion())
-		{
-			// if wiimote has nunchuck connected, we use its acceleration
-            #ifdef SUPPORTS_WIIMOTE
-			if (controller->api() == InputAPI::Wiimote)
-			{
-				if (((NativeWiimoteController*)controller.get())->get_extension() == NativeWiimoteController::Nunchuck)
-				{
-					return ((NativeWiimoteController*)controller.get())->get_nunchuck_motion_sample();
-				}
-			}
-			#endif
-
-			motion++;
-			if(motion == 2)
-			{
-				return controller->get_motion_sample();
-			}
-		}
+		auto* wiimote = (NativeWiimoteController*)m_device.get();
+		if (wiimote->get_extension() == NativeWiimoteController::Nunchuck)
+			return wiimote->get_nunchuck_motion_sample();
 	}
-
+#endif
 	return {};
 }
 
 bool EmulatedController::has_position() const
 {
 	std::shared_lock lock(m_mutex);
-	return std::any_of(m_controllers.cbegin(), m_controllers.cend(), [](const auto& c) {return c->has_position(); });
+	return m_device && m_device->has_position();
 }
 
 glm::vec2 EmulatedController::get_position() const
 {
 	std::shared_lock lock(m_mutex);
-	for (const auto& controller : m_controllers)
-	{
-		if (controller->has_position())
-			return controller->get_position();
-	}
-
+	if (m_device && m_device->has_position())
+		return m_device->get_position();
 	return {};
 }
 
 glm::vec2 EmulatedController::get_prev_position() const
 {
 	std::shared_lock lock(m_mutex);
-	for (const auto& controller : m_controllers)
-	{
-		if (controller->has_position())
-			return controller->get_prev_position();
-	}
-
+	if (m_device && m_device->has_position())
+		return m_device->get_prev_position();
 	return {};
 }
 
 PositionVisibility EmulatedController::GetPositionVisibility() const
 {
 	std::shared_lock lock(m_mutex);
-	for (const auto& controller : m_controllers)
-	{
-		if (controller->has_position())
-			return controller->GetPositionVisibility();
-	}
+	if (m_device && m_device->has_position())
+		return m_device->GetPositionVisibility();
 	return PositionVisibility::NONE;
 }
 
 namespace
 {
-	// the emulated controller's device list as seen by the binding expressions
+	// the emulated controller's devices as seen by the binding expressions: the selected device
+	// (index 0, the default of unqualified inputs) and the devices bindings name explicitly
 	class ControllerDevices : public InputExpr::DeviceSet, public InputExpr::InputSource
 	{
 	public:
-		explicit ControllerDevices(const std::vector<std::shared_ptr<ControllerBase>>& controllers) : m_controllers(controllers) {}
+		ControllerDevices(const std::vector<std::shared_ptr<ControllerBase>>& controllers, bool has_device) : m_controllers(controllers), m_has_device(has_device) {}
 
+		size_t default_device() const override { return m_has_device && !m_controllers.empty() ? 0 : InputExpr::kNoDevice; }
 		size_t device_count() const override { return m_controllers.size(); }
 		std::string device_api(size_t dev) const override { return std::string{InputAPI::to_string(m_controllers[dev]->api())}; }
 		std::string device_uuid(size_t dev) const override { return m_controllers[dev]->uuid(); }
@@ -247,9 +206,13 @@ namespace
 
 		std::optional<InputExpr::InputId> find_input(size_t dev, std::string_view name) const override
 		{
+			// the Keyboard/Mouse device: the mouse's inputs first ("Mouse Left", "TV Cursor X+")
+			if (m_controllers[dev]->api() == InputAPI::Keyboard)
+			{
+				if (const auto mouse = MouseInputs::FromCombinedName(name))
+					return *mouse;
+			}
 			// input ids are small for every API except GTK key values (those are saved as #id)
-			if (m_controllers[dev]->api() == InputAPI::Mouse)
-				return MouseInputs::FromName(name);
 			constexpr uint64 kScanLimit = 0x200;
 			for (uint64 id = 0; id < kScanLimit; ++id)
 			{
@@ -274,60 +237,140 @@ namespace
 
 	private:
 		const std::vector<std::shared_ptr<ControllerBase>>& m_controllers;
+		bool m_has_device;
 	};
+
+	// "API/uuid" -> a device instance, for inputs that name a device explicitly
+	std::shared_ptr<ControllerBase> create_named_device(std::string_view device_text)
+	{
+		const auto slash = device_text.find('/');
+		if (slash == std::string_view::npos || slash + 1 >= device_text.size())
+			return {};
+		try
+		{
+			for (int api = 0; api < InputAPI::MAX; ++api)
+			{
+				if (!boost::iequals(InputAPI::to_string((InputAPI::Type)api), device_text.substr(0, slash)))
+					continue;
+				auto device = ControllerFactory::CreateController((InputAPI::Type)api, device_text.substr(slash + 1), "");
+				if (device)
+					device->connect();
+				return device;
+			}
+		}
+		catch (const std::exception& ex)
+		{
+			cemuLog_log(LogType::InputAPI, "input binding names device {}, which can't be created: {}", device_text, ex.what());
+		}
+		return {};
+	}
 }
+
+#define DEVICES_LOCKED() ControllerDevices(m_controllers, m_device != nullptr)
 
 void EmulatedController::reparse_mappings_locked()
 {
-	const ControllerDevices devices(m_controllers);
+	m_controllers.clear();
+	if (m_device)
+		m_controllers.emplace_back(m_device);
+	m_controllers.insert(m_controllers.end(), m_extra_devices.begin(), m_extra_devices.end());
+	const auto devices = DEVICES_LOCKED();
 	for (auto& [id, expr] : m_mappings)
 		expr = InputExpr::Expression::parse(expr.text(), devices);
 }
 
-void EmulatedController::add_controller(std::shared_ptr<ControllerBase> controller)
+void EmulatedController::sync_devices_locked()
 {
-	controller->connect();
-
-    #ifdef SUPPORTS_WIIMOTE
-    if (const auto wiimote = std::dynamic_pointer_cast<NativeWiimoteController>(controller)) {
-		wiimote->set_player_index(m_player_index);
-	}
-    #endif
-	std::scoped_lock lock(m_mutex);
-	m_controllers.emplace_back(std::move(controller));
-	// bindings that named this device before it was attached now resolve
 	reparse_mappings_locked();
-}
 
-void EmulatedController::remove_controller(const std::shared_ptr<ControllerBase>& controller)
-{
-	std::scoped_lock lock(m_mutex);
-	const auto it = std::find_if(m_controllers.cbegin(), m_controllers.cend(), [&](const auto& c) { return *c == *controller; });
-	if (it != m_controllers.cend())
+	// devices named explicitly that aren't attached yet
+	bool added = false;
+	std::vector<std::string> tried;
+	for (const auto& [id, expr] : m_mappings)
 	{
-		// drop the device's inputs from the binding lists (expressions keep them, unresolved)
+		for (const auto& leaf : expr.leaves())
 		{
-			const ControllerDevices devices(m_controllers);
-			const size_t index = it - m_controllers.cbegin();
-			for (auto m = m_mappings.begin(); m != m_mappings.end();)
+			if (!leaf.qualified || leaf.device != InputExpr::kNoDevice || leaf.device_text.find('/') == std::string::npos)
+				continue;
+			if (std::find(tried.cbegin(), tried.cend(), leaf.device_text) != tried.cend())
+				continue;
+			tried.emplace_back(leaf.device_text);
+			if (auto device = create_named_device(leaf.device_text))
 			{
-				m->second = InputExpr::Expression::remove_device(m->second, index, devices);
-				if (m->second.empty())
-					m = m_mappings.erase(m);
-				else
-					++m;
+				m_extra_devices.emplace_back(std::move(device));
+				added = true;
 			}
 		}
-		m_controllers.erase(it);
-		reparse_mappings_locked();
 	}
+	if (added)
+		reparse_mappings_locked();
+
+	// extra devices no binding names any more
+	const size_t first_extra = m_device ? 1 : 0;
+	std::vector<bool> used(m_controllers.size(), false);
+	for (const auto& [id, expr] : m_mappings)
+	{
+		for (const auto& leaf : expr.leaves())
+		{
+			if (leaf.device != InputExpr::kNoDevice && leaf.device < used.size())
+				used[leaf.device] = true;
+		}
+	}
+	bool removed = false;
+	for (size_t i = m_extra_devices.size(); i-- > 0;)
+	{
+		if (!used[first_extra + i])
+		{
+			m_extra_devices.erase(m_extra_devices.begin() + i);
+			removed = true;
+		}
+	}
+	if (removed)
+		reparse_mappings_locked();
 }
 
-void EmulatedController::clear_controllers()
+std::shared_ptr<ControllerBase> EmulatedController::get_device() const
 {
+	std::shared_lock lock(m_mutex);
+	return m_device;
+}
+
+void EmulatedController::set_device(std::shared_ptr<ControllerBase> device)
+{
+	if (device)
+	{
+		device->connect();
+#ifdef SUPPORTS_WIIMOTE
+		if (const auto wiimote = std::dynamic_pointer_cast<NativeWiimoteController>(device))
+			wiimote->set_player_index(m_player_index);
+#endif
+	}
 	std::scoped_lock lock(m_mutex);
-	m_controllers.clear();
-	reparse_mappings_locked();
+	if (m_device && device && *m_device == *device)
+	{
+		m_device = std::move(device);
+		reparse_mappings_locked();
+		return;
+	}
+	// the old device stays only if a binding names it explicitly
+	if (m_device)
+		m_extra_devices.emplace_back(m_device);
+	if (device)
+		std::erase_if(m_extra_devices, [&](const auto& c) { return *c == *device; });
+	m_device = std::move(device);
+	sync_devices_locked();
+}
+
+std::vector<std::shared_ptr<ControllerBase>> EmulatedController::get_extra_devices() const
+{
+	std::shared_lock lock(m_mutex);
+	return m_extra_devices;
+}
+
+std::vector<std::shared_ptr<ControllerBase>> EmulatedController::get_controllers() const
+{
+	std::shared_lock lock(m_mutex);
+	return m_controllers;
 }
 
 float EmulatedController::get_axis_value(uint64 mapping) const
@@ -341,7 +384,7 @@ float EmulatedController::get_mapping_value(uint64 mapping) const
 	const auto it = m_mappings.find(mapping);
 	if (it == m_mappings.cend())
 		return 0;
-	return it->second.value(ControllerDevices(m_controllers));
+	return it->second.value(DEVICES_LOCKED());
 }
 
 bool EmulatedController::is_mapping_down(uint64 mapping) const
@@ -350,7 +393,7 @@ bool EmulatedController::is_mapping_down(uint64 mapping) const
 	const auto it = m_mappings.find(mapping);
 	if (it == m_mappings.cend())
 		return false;
-	return it->second.active(ControllerDevices(m_controllers));
+	return it->second.active(DEVICES_LOCKED());
 }
 
 bool EmulatedController::has_mapping(uint64 mapping) const
@@ -366,7 +409,14 @@ std::string EmulatedController::get_mapping_name(uint64 mapping) const
 	const auto it = m_mappings.find(mapping);
 	if (it == m_mappings.cend())
 		return {};
-	return it->second.display(ControllerDevices(m_controllers), m_controllers.size() > 1);
+	return it->second.display(DEVICES_LOCKED());
+}
+
+bool EmulatedController::is_mapping_explicit(uint64 mapping) const
+{
+	std::shared_lock lock(m_mutex);
+	const auto it = m_mappings.find(mapping);
+	return it != m_mappings.cend() && it->second.has_qualified_inputs();
 }
 
 std::string EmulatedController::get_mapping_expression(uint64 mapping) const
@@ -379,7 +429,7 @@ std::string EmulatedController::get_mapping_expression(uint64 mapping) const
 std::optional<std::string> EmulatedController::set_mapping_expression(uint64 mapping, std::string_view text, bool keep_invalid)
 {
 	std::scoped_lock lock(m_mutex);
-	auto expr = InputExpr::Expression::parse(text, ControllerDevices(m_controllers));
+	auto expr = InputExpr::Expression::parse(text, DEVICES_LOCKED());
 	if (!expr.ok())
 	{
 		auto error = expr.error();
@@ -391,6 +441,7 @@ std::optional<std::string> EmulatedController::set_mapping_expression(uint64 map
 		m_mappings.erase(mapping);
 	else
 		m_mappings[mapping] = std::move(expr);
+	sync_devices_locked();
 	return std::nullopt;
 }
 
@@ -405,27 +456,13 @@ std::vector<std::string> EmulatedController::get_mapping_warnings(uint64 mapping
 	return it->second.warnings();
 }
 
-std::shared_ptr<ControllerBase> EmulatedController::get_mapping_controller(uint64 mapping) const
-{
-	std::shared_lock lock(m_mutex);
-	const auto it = m_mappings.find(mapping);
-	if (it == m_mappings.cend())
-		return {};
-	for (const auto& leaf : it->second.leaves())
-	{
-		if (leaf.device < m_controllers.size())
-			return m_controllers[leaf.device];
-	}
-	return {};
-}
-
 std::optional<uint64> EmulatedController::get_mapping_button(uint64 mapping, const ControllerBase& controller) const
 {
 	std::shared_lock lock(m_mutex);
 	const auto it = m_mappings.find(mapping);
 	if (it == m_mappings.cend())
 		return std::nullopt;
-	const size_t index = ControllerDevices(m_controllers).index_of(controller);
+	const size_t index = DEVICES_LOCKED().index_of(controller);
 	for (const auto& leaf : it->second.leaves())
 	{
 		if (leaf.device == index && leaf.input)
@@ -448,7 +485,7 @@ std::vector<std::pair<uint64, uint64>> EmulatedController::get_device_inputs(con
 {
 	std::shared_lock lock(m_mutex);
 	std::vector<std::pair<uint64, uint64>> result;
-	const size_t index = ControllerDevices(m_controllers).index_of(controller);
+	const size_t index = DEVICES_LOCKED().index_of(controller);
 	if (index == InputExpr::kNoDevice)
 		return result;
 	for (const auto& [mapping, expr] : m_mappings)
@@ -466,118 +503,93 @@ void EmulatedController::delete_mapping(uint64 mapping)
 {
 	std::scoped_lock lock(m_mutex);
 	m_mappings.erase(mapping);
+	sync_devices_locked();
 }
 
 void EmulatedController::clear_mappings()
 {
 	std::scoped_lock lock(m_mutex);
 	m_mappings.clear();
-}
-
-void EmulatedController::set_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller,
-                                     uint64 button)
-{
-	std::scoped_lock lock(m_mutex);
-	const ControllerDevices devices(m_controllers);
-	const size_t index = devices.index_of(*controller);
-	if (index == InputExpr::kNoDevice)
-		return;
-	auto& expr = m_mappings[mapping];
-	expr = InputExpr::Expression::append(InputExpr::Expression::remove_device(expr, index, devices), index, button, devices);
+	sync_devices_locked();
 }
 
 void EmulatedController::add_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller, uint64 button)
 {
 	std::scoped_lock lock(m_mutex);
-	const ControllerDevices devices(m_controllers);
-	const size_t index = devices.index_of(*controller);
-	if (index == InputExpr::kNoDevice)
-		return;
+	if (DEVICES_LOCKED().index_of(*controller) == InputExpr::kNoDevice)
+	{
+		// another device (Detect on all devices): attached as an explicitly named device
+		m_extra_devices.emplace_back(controller);
+		reparse_mappings_locked();
+	}
+	const auto devices = DEVICES_LOCKED();
 	auto& expr = m_mappings[mapping];
-	expr = InputExpr::Expression::append(expr, index, button, devices);
+	expr = InputExpr::Expression::append(expr, devices.index_of(*controller), button, devices);
+	sync_devices_locked();
 }
 
 void EmulatedController::replace_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller, uint64 button)
 {
 	std::scoped_lock lock(m_mutex);
-	const ControllerDevices devices(m_controllers);
-	const size_t index = devices.index_of(*controller);
-	if (index == InputExpr::kNoDevice)
-		return;
-	m_mappings[mapping] = InputExpr::Expression::from_input(index, button, devices);
-}
-
-void EmulatedController::remove_device_mappings(const std::shared_ptr<ControllerBase>& controller)
-{
-	std::scoped_lock lock(m_mutex);
-	const ControllerDevices devices(m_controllers);
-	const size_t index = devices.index_of(*controller);
-	if (index == InputExpr::kNoDevice)
-		return;
-	for (auto m = m_mappings.begin(); m != m_mappings.end();)
+	if (DEVICES_LOCKED().index_of(*controller) == InputExpr::kNoDevice)
 	{
-		m->second = InputExpr::Expression::remove_device(m->second, index, devices);
-		if (m->second.empty())
-			m = m_mappings.erase(m);
-		else
-			++m;
+		m_extra_devices.emplace_back(controller);
+		reparse_mappings_locked();
 	}
+	const auto devices = DEVICES_LOCKED();
+	m_mappings[mapping] = InputExpr::Expression::from_input(devices.index_of(*controller), button, devices);
+	sync_devices_locked();
 }
 
 InputExpr::Expression EmulatedController::parse_expression(std::string_view text) const
 {
 	std::shared_lock lock(m_mutex);
-	return InputExpr::Expression::parse(text, ControllerDevices(m_controllers));
+	return InputExpr::Expression::parse(text, DEVICES_LOCKED());
 }
 
 std::pair<float, bool> EmulatedController::evaluate_expression(const InputExpr::Expression& expression) const
 {
 	std::shared_lock lock(m_mutex);
-	const ControllerDevices devices(m_controllers);
+	const auto devices = DEVICES_LOCKED();
 	return {expression.value(devices), expression.active(devices)};
 }
 
-bool EmulatedController::set_default_mapping(const std::shared_ptr<ControllerBase>& controller, bool replace)
+bool EmulatedController::load_default_bindings()
 {
-	const auto defaults = get_default_mapping(controller);
-	std::scoped_lock lock(m_mutex);
-	const ControllerDevices devices(m_controllers);
-	const size_t index = devices.index_of(*controller);
-	if (index == InputExpr::kNoDevice)
-		return false;
-
-	bool changed = false;
-	if (replace)
+	const auto device = get_device();
+	std::vector<std::pair<uint64, uint64>> ids;
+	std::vector<std::pair<uint64, std::string>> texts;
+	if (device)
 	{
-		for (auto m = m_mappings.begin(); m != m_mappings.end();)
+		ids = get_default_mapping(device);
+		if (device->api() == InputAPI::Keyboard)
 		{
-			auto updated = InputExpr::Expression::remove_device(m->second, index, devices);
-			changed |= updated.text() != m->second.text();
-			m->second = std::move(updated);
-			if (m->second.empty())
-				m = m_mappings.erase(m);
-			else
-				++m;
+			// Keyboard/Mouse: the keyboard layout (by key name, so it is the same on every OS) and
+			// the mouse's groups
+			texts = InputPresets::KeyboardTable(type());
+			for (const auto& [control, input] : MouseBindings::MouseDefaults(type_string()))
+			{
+				if (std::none_of(texts.cbegin(), texts.cend(), [control = control](const auto& t) { return t.first == control; }))
+					ids.emplace_back(control, MouseInputs::KeyboardId(input));
+			}
 		}
 	}
 
-	for (const auto& [mapping, button] : defaults)
+	std::scoped_lock lock(m_mutex);
+	m_mappings.clear();
+	const auto devices = DEVICES_LOCKED();
+	for (const auto& [mapping, button] : ids)
 	{
-		auto& expr = m_mappings[mapping];
-		// never steal: a device only adds to the controls where it has nothing yet
-		if (expr.references_device(index))
+		if (std::any_of(texts.cbegin(), texts.cend(), [mapping = mapping](const auto& t) { return t.first == mapping; }))
 			continue;
-		expr = InputExpr::Expression::append(expr, index, button, devices);
-		changed = true;
+		auto& expr = m_mappings[mapping];
+		expr = InputExpr::Expression::append(expr, devices.default_device(), button, devices);
 	}
-	for (auto m = m_mappings.begin(); m != m_mappings.end();)
-	{
-		if (m->second.empty())
-			m = m_mappings.erase(m);
-		else
-			++m;
-	}
-	return changed;
+	for (const auto& [mapping, text] : texts)
+		m_mappings[mapping] = InputExpr::Expression::parse(text, devices);
+	std::erase_if(m_mappings, [](const auto& m) { return m.second.empty(); });
+	sync_devices_locked();
+	return !m_mappings.empty();
 }
 
 bool EmulatedController::operator==(const EmulatedController& o) const

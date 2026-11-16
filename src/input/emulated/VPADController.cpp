@@ -674,9 +674,6 @@ std::vector<std::pair<uint64, uint64>> VPADController::get_default_mapping(const
 		});
 		break;
 	}
-	case InputAPI::Mouse:
-		mapping = MouseBindings::MouseDefaults(MouseBindings::kTypeGamePad);
-		break;
 	case InputAPI::XInput:
 	{
 		mapping =

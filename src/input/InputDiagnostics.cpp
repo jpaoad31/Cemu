@@ -40,9 +40,7 @@ namespace InputDiagnostics
 		switch (controller.api())
 		{
 		case InputAPI::Keyboard:
-			return "always available";
-		case InputAPI::Mouse:
-			return "always available (the game windows)";
+			return "always available (the mouse: over the game windows)";
 		case InputAPI::RemoteGamePad:
 			return connected ? "phone connected" : "waiting for the phone";
 #ifdef SUPPORTS_WIIMOTE
@@ -64,7 +62,10 @@ namespace InputDiagnostics
 		if (!self)
 			return result;
 
-		for (const auto& device : self->get_controllers())
+		const auto device = self->get_device();
+		if (!device)
+			result.push_back({"No device selected: only bindings that name a device explicitly work.", false});
+		else
 		{
 #ifdef SUPPORTS_WIIMOTE
 			// a real Wii device in the wrong role
@@ -77,28 +78,21 @@ namespace InputDiagnostics
 				}
 			}
 #endif
-			// the same device on other emulated controllers
+			// the same device selected on other emulated controllers
 			for (size_t i = 0; i < InputManager::kMaxController; ++i)
 			{
-				if (i == player_index)
+				const auto other = i == player_index ? nullptr : manager.get_controller(i);
+				const auto other_device = other ? other->get_device() : nullptr;
+				if (!other_device || !(*other_device == *device))
 					continue;
-				const auto other = manager.get_controller(i);
-				if (!other)
-					continue;
-				const auto& others = other->get_controllers();
-				const auto it = std::find_if(others.cbegin(), others.cend(), [&](const auto& c) { return *c == *device; });
-				if (it == others.cend())
-					continue;
-
 				if (is_exclusive(*device))
 				{
-					result.push_back({fmt::format("{} is also assigned to {}: one real controller can only be one emulated controller.", device_label(*device), controller_label(*other)), true});
+					result.push_back({fmt::format("This device is also selected on {}: one real controller can only be one emulated controller.", controller_label(*other)), true});
 					continue;
 				}
-
-				// shared keyboards and pads are fine as long as no input drives both players
+				// a keyboard or a pad on two controllers is fine while no input drives both
 				const auto mine = self->get_device_inputs(*device);
-				const auto theirs = other->get_device_inputs(**it);
+				const auto theirs = other->get_device_inputs(*other_device);
 				std::vector<std::string> shared;
 				for (const auto& [m, input] : mine)
 				{
@@ -109,15 +103,13 @@ namespace InputDiagnostics
 							shared.emplace_back(std::move(name));
 					}
 				}
-				if (!shared.empty())
+				if (shared.size() > 4)
 				{
-					if (shared.size() > 4)
-					{
-						shared.resize(4);
-						shared.emplace_back("...");
-					}
-					result.push_back({fmt::format("{} inputs also used by {}: {}", device_label(*device), controller_label(*other), fmt::join(shared, ", ")), false});
+					shared.resize(4);
+					shared.emplace_back("...");
 				}
+				result.push_back({shared.empty() ? fmt::format("This device is also selected on {}.", controller_label(*other))
+					: fmt::format("This device is also selected on {}; inputs used by both: {}", controller_label(*other), fmt::join(shared, ", ")), false});
 			}
 		}
 
@@ -125,13 +117,13 @@ namespace InputDiagnostics
 		// both following the mouse was the old implicit behaviour, now visible)
 		{
 			const auto uses_cursor = [](const EmulatedController& c) {
-				for (const auto& device : c.get_controllers())
+				for (const auto& d : c.get_controllers())
 				{
-					if (device->api() != InputAPI::Mouse)
+					if (d->api() != InputAPI::Keyboard)
 						continue;
-					for (const auto& [mapping, input] : c.get_device_inputs(*device))
+					for (const auto& [mapping, input] : c.get_device_inputs(*d))
 					{
-						if (!MouseInputs::IsPressable(input))
+						if (MouseInputs::IsKeyboardMouseId(input) && !MouseInputs::IsPressable(MouseInputs::MouseIdOf(input)))
 							return true;
 					}
 				}
@@ -143,7 +135,7 @@ namespace InputDiagnostics
 				{
 					const auto other = i == player_index ? nullptr : manager.get_controller(i);
 					if (other && uses_cursor(*other))
-						result.push_back({fmt::format("The mouse cursor also drives {}: moving the mouse moves both (clear one's Mouse bindings if that isn't wanted).", controller_label(*other)), false});
+						result.push_back({fmt::format("The mouse cursor also drives {}: moving the mouse moves both.", controller_label(*other)), false});
 				}
 			}
 		}
@@ -155,12 +147,17 @@ namespace InputDiagnostics
 				result.push_back({info.text, info.source == BalanceBoardController::Source::EmulatedFallback});
 		}
 
-		// bindings that refer to devices that aren't attached, or don't parse
-		size_t broken = 0;
+		// bindings with inputs the device doesn't have, or that don't parse; explicit other devices
+		size_t broken = 0, explicit_bindings = 0;
 		for (const auto mapping : self->get_mapping_ids())
+		{
 			broken += self->get_mapping_warnings(mapping).empty() ? 0 : 1;
+			explicit_bindings += self->is_mapping_explicit(mapping) ? 1 : 0;
+		}
 		if (broken)
-			result.push_back({fmt::format("{} binding(s) use devices that aren't attached or don't parse (shown with ?).", broken), false});
+			result.push_back({fmt::format("{} binding(s) use inputs the device doesn't have, devices that aren't available, or don't parse (shown with ?).", broken), false});
+		if (explicit_bindings)
+			result.push_back({fmt::format("{} binding(s) name another device explicitly (advanced, shown with [device]).", explicit_bindings), false});
 		return result;
 	}
 

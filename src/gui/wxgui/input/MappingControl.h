@@ -25,8 +25,9 @@ public:
 
 	void set_action_handler(std::function<void(MappingControl*, Action)> handler) { m_handler = std::move(handler); }
 
-	// binding text and warnings (the tooltip shows the full expression)
-	void set_binding(const wxString& display, const wxString& expression, const wxString& warnings);
+	// binding text and warnings (the tooltip shows the full expression); explicit_device: the binding
+	// names another device than the controller's (advanced): drawn in the link colour with a mark
+	void set_binding(const wxString& display, const wxString& expression, const wxString& warnings, bool explicit_device = false);
 	// live state; repaints only on a visible change
 	void set_live(float value, bool active);
 	// detection countdown; seconds_left < 0 ends detection
@@ -46,6 +47,7 @@ private:
 
 	wxString m_display;
 	bool m_has_warnings = false;
+	bool m_explicit = false;
 	float m_value = 0;
 	bool m_active = false;
 	int m_detect_seconds = -1;

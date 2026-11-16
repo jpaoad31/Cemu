@@ -30,7 +30,25 @@ bool InputDetector::update_device(ControllerBase& controller)
 	return true;
 }
 
-void InputDetector::start(const EmulatedControllerPtr& controller, uint64 mapping, bool append, MappingControl* control, Callback callback)
+std::vector<ControllerPtr> InputDetector::candidate_devices(const ControllerPtr& selected, const std::vector<ControllerPtr>& extra, const std::vector<ControllerPtr>& others, bool all_devices)
+{
+	std::vector<ControllerPtr> result;
+	const auto add = [&](const ControllerPtr& c) {
+		if (c && std::none_of(result.cbegin(), result.cend(), [&](const ControllerPtr& r) { return *r == *c; }))
+			result.push_back(c);
+	};
+	add(selected);
+	if (all_devices)
+	{
+		for (const auto& c : extra)
+			add(c);
+		for (const auto& c : others)
+			add(c);
+	}
+	return result;
+}
+
+void InputDetector::start(const EmulatedControllerPtr& controller, uint64 mapping, bool append, MappingControl* control, Callback callback, bool all_devices)
 {
 	if (m_active)
 		cancel();
@@ -46,36 +64,43 @@ void InputDetector::start(const EmulatedControllerPtr& controller, uint64 mappin
 	m_key.reset();
 	m_candidates.clear();
 
-	// the attached devices, then the keyboard and the connected SDL gamepads that aren't attached
-	for (const auto& c : controller->get_controllers())
-		m_candidates.push_back({c, true, {}});
-	const auto is_attached = [this](const ControllerBase& c) {
-		return std::any_of(m_candidates.cbegin(), m_candidates.cend(), [&](const Candidate& k) { return *k.controller == c; });
-	};
-	try
+	std::vector<ControllerPtr> others;
+	if (all_devices)
 	{
-		auto keyboard = ControllerFactory::CreateController(InputAPI::Keyboard, "keyboard", "Keyboard");
-		if (keyboard && !is_attached(*keyboard))
-			m_candidates.push_back({keyboard, false, {}});
-		// clicks and the wheel (the mouse over the game windows, or anywhere in the settings window)
-		auto mouse = ControllerFactory::CreateController(InputAPI::Mouse, "mouse", "Mouse");
-		if (mouse && !is_attached(*mouse))
-			m_candidates.push_back({mouse, false, {}});
-	}
-	catch (const std::exception&)
-	{
-	}
-	auto& manager = InputManager::instance();
-	if (manager.is_api_available(InputAPI::SDLController))
-	{
-		for (const auto& c : manager.get_api_provider(InputAPI::SDLController)->get_controllers())
+		// Keyboard/Mouse and the connected SDL gamepads
+		try
 		{
-			if (!is_attached(*c))
+			if (auto keyboard = ControllerFactory::CreateController(InputAPI::Keyboard, "keyboard", "Keyboard/Mouse"))
+				others.push_back(keyboard);
+		}
+		catch (const std::exception&)
+		{
+		}
+		auto& manager = InputManager::instance();
+		if (manager.is_api_available(InputAPI::SDLController))
+		{
+			for (const auto& c : manager.get_api_provider(InputAPI::SDLController)->get_controllers())
 			{
 				c->connect();
-				m_candidates.push_back({c, false, {}});
+				others.push_back(c);
 			}
 		}
+	}
+	for (const auto& c : candidate_devices(controller->get_device(), controller->get_extra_devices(), others, all_devices))
+		m_candidates.push_back({c, {}});
+	if (m_candidates.empty())
+	{
+		m_controller.reset();
+		m_control = nullptr;
+		auto cb = std::move(m_callback);
+		m_callback = nullptr;
+		if (cb)
+		{
+			Result result;
+			result.message = _("No device selected: choose this controller's device first (or tick \"All devices\").").utf8_string();
+			cb(result);
+		}
+		return;
 	}
 
 	// the click that started this is held now: it must be in the mouse's baseline
@@ -92,9 +117,9 @@ void InputDetector::start(const EmulatedControllerPtr& controller, uint64 mappin
 		m_control->set_detecting((int)std::chrono::duration_cast<std::chrono::seconds>(kTimeout).count(), m_append);
 }
 
-void InputDetector::start_for_input(const EmulatedControllerPtr& controller, std::function<void(const ControllerPtr&, uint64)> on_input, Callback callback)
+void InputDetector::start_for_input(const EmulatedControllerPtr& controller, std::function<void(const ControllerPtr&, uint64)> on_input, Callback callback, bool all_devices)
 {
-	start(controller, 0, true, nullptr, std::move(callback));
+	start(controller, 0, true, nullptr, std::move(callback), all_devices);
 	m_on_input = std::move(on_input);
 }
 
@@ -169,7 +194,7 @@ void InputDetector::poll()
 		{
 			if (candidate.controller->api() == InputAPI::Keyboard)
 			{
-				finish(candidate.controller, key, candidate.attached);
+				finish(candidate.controller, key);
 				return;
 			}
 		}
@@ -206,33 +231,31 @@ void InputDetector::poll()
 				if (other > value)
 					continue;
 			}
-			finish(candidate.controller, id, candidate.attached);
+			finish(candidate.controller, id);
 			return;
 		}
 	}
 }
 
-void InputDetector::finish(const ControllerPtr& controller, uint64 input, bool attached)
+void InputDetector::finish(const ControllerPtr& controller, uint64 input)
 {
 	Result result;
 	result.detected = true;
 	auto emulated = m_controller;
-	if (!attached && emulated)
-	{
-		emulated->add_controller(controller);
-		result.device_added = true;
-	}
+	const auto selected = emulated ? emulated->get_device() : nullptr;
+	result.other_device = !selected || !(*selected == *controller);
 	if (m_on_input)
 		m_on_input(controller, input);
 	else if (emulated)
 	{
+		// the selected device's input is written plainly, another device's with its device
 		if (m_append)
 			emulated->add_mapping(m_mapping, controller, input);
 		else
 			emulated->replace_mapping(m_mapping, controller, input);
 	}
-	result.message = fmt::format("{} [{}]{}", controller->get_button_name(input), controller->display_name(),
-		result.device_added ? " (device added)" : "");
+	result.message = result.other_device ? fmt::format("{} [{}] (another device: written explicitly)", controller->get_button_name(input), controller->display_name())
+		: controller->get_button_name(input);
 
 	m_active = false;
 	if (m_control)

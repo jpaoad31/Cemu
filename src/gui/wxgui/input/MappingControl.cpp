@@ -21,17 +21,20 @@ wxSize MappingControl::DoGetBestClientSize() const
 	return FromDIP(wxSize(160, 22));
 }
 
-void MappingControl::set_binding(const wxString& display, const wxString& expression, const wxString& warnings)
+void MappingControl::set_binding(const wxString& display, const wxString& expression, const wxString& warnings, bool explicit_device)
 {
 	const bool has_warnings = !warnings.empty();
-	if (display == m_display && has_warnings == m_has_warnings)
+	if (display == m_display && has_warnings == m_has_warnings && explicit_device == m_explicit)
 		return;
 	m_display = display;
 	m_has_warnings = has_warnings;
+	m_explicit = explicit_device;
 	wxString tip = expression.empty() ? _("Not bound.") : expression;
+	if (explicit_device)
+		tip += "\n\n" + _("Uses another device than this controller's, by name (advanced).");
 	if (has_warnings)
 		tip += "\n\n" + warnings;
-	tip += "\n\n" + _("Click: detect (press an input on any device within 3 s, Esc cancels).\nShift-click: detect and add to the binding.\nRight click: clear, remove one input, advanced editor.");
+	tip += "\n\n" + _("Click: detect (press an input on this controller's device within 3 s, Esc cancels).\nShift-click: detect and add to the binding.\nRight click: clear, remove one input, advanced editor.");
 	SetToolTip(tip);
 	Refresh();
 }
@@ -125,9 +128,19 @@ void MappingControl::on_paint(wxPaintEvent&)
 	else
 		label = m_display;
 
+	const int pad = FromDIP(6);
+	if (m_explicit && !detecting)
+	{
+		// another device, named explicitly: a mark at the left and the link colour
+		const wxColour link = wxSystemSettings::GetColour(wxSYS_COLOUR_HOTLIGHT);
+		dc.SetPen(*wxTRANSPARENT_PEN);
+		dc.SetBrush(wxBrush(link));
+		dc.DrawRectangle(r.x + 1, r.y + FromDIP(3), FromDIP(3), r.height - FromDIP(6));
+		if (!m_active)
+			text_colour = link;
+	}
 	dc.SetFont(GetFont());
 	dc.SetTextForeground(text_colour);
-	const int pad = FromDIP(6);
 	const wxString shown = wxControl::Ellipsize(label, dc, wxELLIPSIZE_END, r.width - 2 * pad);
 	const wxSize extent = dc.GetTextExtent(shown);
 	dc.DrawText(shown, r.x + pad, r.y + (r.height - extent.y) / 2);

@@ -109,7 +109,8 @@ void InputPanel::refresh_bindings()
 		const auto warnings = m_controller->get_mapping_warnings(id);
 		control->set_binding(wxString::FromUTF8(m_controller->get_mapping_name(id)),
 			wxString::FromUTF8(m_controller->get_mapping_expression(id)),
-			wxString::FromUTF8(fmt::format("{}", fmt::join(warnings, "\n"))));
+			wxString::FromUTF8(fmt::format("{}", fmt::join(warnings, "\n"))),
+			m_controller->is_mapping_explicit(id));
 	}
 }
 
@@ -142,17 +143,20 @@ void InputPanel::on_mapping_action(MappingControl* control, MappingControl::Acti
 		}
 		const bool append = action == MappingControl::Action::DetectAppend;
 		const wxString label = m_labels.contains(control->mapping()) ? m_labels[control->mapping()] : wxString();
-		report(append ? wxString::Format(_("%s: press an input on any device to add it (3 s, Esc cancels)"), label)
-			: wxString::Format(_("%s: press an input on any device (3 s, Esc cancels; Shift-click adds instead of replacing)"), label));
+		const auto device = m_controller->get_device();
+		const bool all = detector->all_devices();
+		const wxString where = all ? _("any device") : device ? wxString::FromUTF8(device->display_name()) : _("the device");
+		report(append ? wxString::Format(_("%s: press an input on %s to add it (3 s, Esc cancels)"), label, where)
+			: wxString::Format(_("%s: press an input on %s (3 s, Esc cancels; Shift-click adds instead of replacing)"), label, where));
 		detector->start(m_controller, control->mapping(), append, control, [this, label](const InputDetector::Result& result) {
 			refresh_bindings();
-			if (result.device_added && m_devices_changed_handler)
+			if (result.other_device && m_devices_changed_handler)
 				m_devices_changed_handler();
 			if (result.detected)
 				report(wxString::Format(_("%s: %s"), label, wxString::FromUTF8(result.message)));
 			else
 				report(wxString::FromUTF8(result.message), !result.message.empty());
-		});
+		}, all);
 		break;
 	}
 	case MappingControl::Action::Menu:
@@ -168,7 +172,7 @@ void InputPanel::show_menu(MappingControl* control)
 	const auto id = control->mapping();
 	const auto expr = m_controller->parse_expression(m_controller->get_mapping_expression(id));
 	const auto leaves = expr.leaves();
-	const auto& devices = m_controller->get_controllers();
+	const auto devices = m_controller->get_controllers();
 
 	wxMenu menu;
 	enum
@@ -189,9 +193,9 @@ void InputPanel::show_menu(MappingControl* control)
 			const auto& l = leaves[i];
 			std::string name = l.input_text;
 			if (l.device < devices.size() && l.input)
-				name = fmt::format("{} [{}]", devices[l.device]->get_button_name(*l.input), devices[l.device]->display_name());
-			else
-				name += fmt::format(" [{}]", l.device_text);
+				name = devices[l.device]->get_button_name(*l.input);
+			if (l.qualified)
+				name += fmt::format(" [{}]", l.device < devices.size() ? devices[l.device]->display_name() : l.device_text);
 			menu.Append(kRemoveFirst + (int)i, wxString::Format(_("Remove %s"), wxString::FromUTF8(name)));
 		}
 	}
@@ -236,7 +240,7 @@ void InputPanel::open_advanced(MappingControl* control)
 {
 	const auto id = control->mapping();
 	const wxString label = m_labels.contains(id) ? m_labels[id] : wxString::Format("%llu", (unsigned long long)id);
-	const size_t device_count = m_controller->get_controllers().size();
+	const size_t device_count = m_controller->get_extra_devices().size();
 	ExpressionDialog dialog(wxGetTopLevelParent(this), m_controller, id, label);
 	if (dialog.ShowModal() == wxID_OK)
 	{
@@ -246,6 +250,6 @@ void InputPanel::open_advanced(MappingControl* control)
 			report(wxString::Format(_("%s: binding changed."), label));
 	}
 	refresh_bindings();
-	if (m_controller->get_controllers().size() != device_count && m_devices_changed_handler)
+	if (m_controller->get_extra_devices().size() != device_count && m_devices_changed_handler)
 		m_devices_changed_handler();
 }

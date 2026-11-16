@@ -33,15 +33,14 @@ add_library(CemuInput
 	api/Keyboard/KeyboardController.cpp
 	api/Keyboard/KeyboardController.h
 	api/Mouse/MouseInputs.h
-	api/Mouse/MouseControllerProvider.h
-	api/Mouse/MouseController.h
-	api/Mouse/MouseController.cpp
 	MouseState.h
 	MouseState.cpp
 	InputPresets.h
 	InputPresets.cpp
 	emulated/MouseBindings.h
 	emulated/MouseBindings.cpp
+	emulated/SingleDeviceMigration.cpp
+	emulated/SingleDeviceMigration.h
 	emulated/ProController.cpp
 	emulated/EmulatedController.h
 	emulated/EmulatedController.cpp

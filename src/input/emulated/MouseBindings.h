@@ -5,9 +5,9 @@
 // touch screen, the GamePad's mouse tilt, the Wii Remote pointer and the Balance Board's centre of
 // balance are controls with bindings, and the Mouse device (MouseInputs.h) is one of their sources.
 //
-// This file has the control ids of those groups, the Mouse device's default bindings per emulated
-// controller, and the conversion of old profiles (whose mouse use was implicit). No Cemu
-// dependencies, so the tests can use it.
+// This file has the control ids of those groups, the mouse's default bindings per emulated
+// controller (part of the Keyboard/Mouse device's defaults), and the conversion of old profiles
+// (whose mouse use was implicit). No Cemu dependencies, so the tests can use it.
 
 #include <cstdint>
 #include <map>
@@ -67,10 +67,12 @@ namespace MouseBindings
 	constexpr std::string_view kTypeWiimote = "Wiimote";
 	constexpr std::string_view kTypeBoard = "Balance Board";
 
-	// the mouse device as written in bindings
+	// the old separate Mouse device as written in bindings (profiles before version 3)
 	constexpr std::string_view kMouseDevice = "Mouse/mouse";
+	// the Keyboard/Mouse device
+	constexpr std::string_view kKeyboardDevice = "Keyboard/keyboard";
 
-	// (control, mouse input) pairs
+	// (control, mouse input) pairs; mouse ids (MouseInputs::Id), not the Keyboard/Mouse device's
 	using Pairs = std::vector<std::pair<uint64_t, uint64_t>>;
 	// GamePad: touch = the cursor over the GamePad view + left click there
 	Pairs GamePadTouchDefaults();
@@ -83,8 +85,12 @@ namespace MouseBindings
 	// the Mouse device's default bindings for an emulated controller type
 	Pairs MouseDefaults(std::string_view type);
 
-	// `Mouse/mouse:<input>`
+	// `Mouse/mouse:<input>` (old profiles)
 	std::string MouseInputText(uint64_t input);
+	// `<input>` on the Keyboard/Mouse device when it is the selected one: `GamePad Mouse Left`
+	std::string CombinedInputText(uint64_t input);
+	// `Keyboard/keyboard:<input>`: the mouse on a controller whose device is another one (explicit)
+	std::string QualifiedMouseText(uint64_t input);
 
 	// Old profiles (no bindings version 2): what the mouse did implicitly, as bindings to add.
 	// - GamePad: touch (left click on the GamePad image) unless touch is bound; mouse tilt (right
@@ -95,6 +101,9 @@ namespace MouseBindings
 	// bindings: control id -> expression text; has_wii_device: a "Wiimote" API device is attached.
 	std::map<uint64_t, std::string> ImplicitMouseBindings(std::string_view type, const std::map<uint64_t, std::string>& bindings, bool has_wii_device);
 
-	// profile <bindings version="..">: 2 = explicit mouse bindings
-	constexpr int kBindingsVersion = 2;
+	// profile <bindings version="..">: 2 = explicit mouse bindings (a separate Mouse device),
+	// 3 = one device per emulated controller, unqualified inputs are that device's (see
+	// SingleDeviceMigration.h)
+	constexpr int kMouseBindingsVersion = 2;
+	constexpr int kBindingsVersion = 3;
 }

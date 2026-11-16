@@ -14,7 +14,6 @@
 #endif
 
 #include "input/api/Keyboard/KeyboardControllerProvider.h"
-#include "input/api/Mouse/MouseControllerProvider.h"
 #include "input/api/DSU/DSUControllerProvider.h"
 #include "input/api/GameCube/GameCubeControllerProvider.h"
 #include "input/api/RemoteGamePad/RemoteGamePadControllerProvider.h"
@@ -42,8 +41,9 @@ public:
 	bool load(size_t player_index, std::string_view filename = {});
 
 	bool migrate_config(const fs::path& file_path);
-	// an old profile's implicit mouse use as explicit Mouse bindings (adds the Mouse device)
-	static void add_implicit_mouse_bindings(EmulatedController& emulated_controller);
+	// the note of the last load of this player's profile, once: "Bindings from <device> were
+	// removed: one device per controller" when an old profile's extra devices were dropped
+	std::string take_migration_note(size_t player_index);
 
 	void save() noexcept;
 	bool save(size_t player_index, std::string_view filename = {});
@@ -109,6 +109,9 @@ private:
 	std::array<EmulatedControllerPtr, kMaxWPADControllers> m_wpad;
 
 	std::array<bool, kMaxController> m_is_gameprofile_set{};
+
+	std::mutex m_notes_mutex;
+	std::array<std::string, kMaxController> m_migration_notes;
 
 	template<std::derived_from<ControllerProviderBase> TProvider>
 	void create_provider()

@@ -169,7 +169,7 @@ WiimoteInputPanel::WiimoteInputPanel(wxWindow* parent)
 			{W::kButtonId_Pointer_Left, label(W::kButtonId_Pointer_Left)}, {W::kButtonId_Pointer_Right, label(W::kButtonId_Pointer_Right)},
 			{W::kButtonId_Pointer_Hide, label(W::kButtonId_Pointer_Hide)}, {W::kButtonId_Pointer_Recenter, label(W::kButtonId_Pointer_Recenter)},
 		}, true);
-		group->GetStaticBox()->SetToolTip(_("Where the Wii Remote points on the TV. Default with the Mouse device: the cursor over the TV window. A real Wii Remote's IR camera wins while it sees the sensor bar."));
+		group->GetStaticBox()->SetToolTip(_("Where the Wii Remote points on the TV. Default with the Keyboard/Mouse device: the cursor over the TV window. With a real Wii Remote as the device, its IR camera points while it sees the sensor bar."));
 		group->Add(create_clear_button(group->GetStaticBox(), {W::kButtonId_Pointer_Up, W::kButtonId_Pointer_Down, W::kButtonId_Pointer_Left, W::kButtonId_Pointer_Right, W::kButtonId_Pointer_Hide, W::kButtonId_Pointer_Recenter}, _("the pointer")), 0, wxALL, 4);
 		pointer_row->Add(group, 1, wxEXPAND | wxALL, 4);
 

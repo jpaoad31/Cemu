@@ -24,7 +24,7 @@ using wxControllerData = wxCustomData<ControllerPtr>;
 
 InputAPIAddWindow::InputAPIAddWindow(wxWindow* parent, const wxPoint& position,
                                      const std::vector<ControllerPtr>& controllers)
-	: wxDialog(parent, wxID_ANY, "Add input API", position, wxDefaultSize, wxCAPTION), m_controllers(controllers)
+	: wxDialog(parent, wxID_ANY, _("Choose a device"), position, wxDefaultSize, wxCAPTION), m_controllers(controllers)
 {
 	this->SetSizeHints(wxDefaultSize, wxDefaultSize);
 
@@ -69,7 +69,7 @@ InputAPIAddWindow::InputAPIAddWindow(wxWindow* parent, const wxPoint& position,
 	{
 		auto* end_row = new wxBoxSizer(wxHORIZONTAL);
 
-		m_ok_button = new wxButton(this, wxID_ANY, _("Add"));
+		m_ok_button = new wxButton(this, wxID_ANY, _("Use this device"));
 		m_ok_button->Bind(wxEVT_BUTTON, &InputAPIAddWindow::on_add_button, this);
 		m_ok_button->Disable();
 		end_row->Add(m_ok_button, 0, wxALL, 5);
@@ -131,15 +131,6 @@ void InputAPIAddWindow::on_add_button(wxCommandEvent& event)
 		return;
 	}
 
-	for (const auto& c : m_controllers)
-	{
-		if (*c == *m_controller)
-		{
-			wxMessageBox(_("The controller is already added!"), _("Error"), wxOK | wxCENTRE | wxICON_ERROR, this);
-			return;
-		}
-	}
-
 	m_type = static_cast<wxTypeData*>(m_input_api->GetClientObject(selection))->get();
 	EndModal(wxID_OK);
 }
@@ -190,11 +181,10 @@ void InputAPIAddWindow::on_api_selected(wxCommandEvent& event)
 
     const auto selection = m_input_api->GetStringSelection();
 	// keyboard is a special case, as theres only one device supported atm
-	const bool single_device_api = selection == wxString::FromUTF8(to_string(InputAPI::Keyboard)) || selection == wxString::FromUTF8(to_string(InputAPI::Mouse));
+	const bool single_device_api = selection == wxString::FromUTF8(to_string(InputAPI::Keyboard));
 	if (single_device_api)
 	{
-		const auto api = selection == wxString::FromUTF8(to_string(InputAPI::Mouse)) ? InputAPI::Mouse : InputAPI::Keyboard;
-		const auto controllers = InputManager::instance().get_api_provider(api)->get_controllers();
+		const auto controllers = InputManager::instance().get_api_provider(InputAPI::Keyboard)->get_controllers();
 		if (!controllers.empty())
 		{
 			m_controller = controllers[0];

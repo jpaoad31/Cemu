@@ -2,8 +2,10 @@
 
 // "Detect" capture for the input settings (fork addition, see INPUT_REWORK.md), after Dolphin's
 // detect-with-timeout: after a click on a binding field, the first input that changes from its
-// state at the click, on any attached device, the keyboard or any connected SDL gamepad, becomes
-// the binding (or is added to it). 3 seconds, Escape cancels.
+// state at the click becomes the binding (or is added to it). 3 seconds, Escape cancels. It listens
+// to the emulated controller's selected device only, as Dolphin does; with "All devices" also to
+// the devices bindings name, Keyboard/Mouse and every connected SDL gamepad, and an input of
+// another device than the selected one is written with its device (explicit).
 //
 // Why not wx key events in a focused text field (the old way): on macOS a text field doesn't
 // always hold the focus, keys pressed with Command never send a key-up (a "stuck" key blocked the
@@ -29,8 +31,8 @@ public:
 	struct Result
 	{
 		bool detected = false;
-		bool device_added = false; // the input came from a device that wasn't attached yet
-		std::string message;       // for a status line ("Bound X [Keyboard]", "No input detected")
+		bool other_device = false; // the input came from another device than the selected one
+		std::string message;       // for a status line ("X", "A [Remote GamePad] (explicit)", "No input detected")
 	};
 	using Callback = std::function<void(const Result&)>;
 
@@ -40,10 +42,18 @@ public:
 	~InputDetector();
 
 	// expression_only: report the input through on_input instead of changing the binding
-	void start(const EmulatedControllerPtr& controller, uint64 mapping, bool append, MappingControl* control, Callback callback);
-	void start_for_input(const EmulatedControllerPtr& controller, std::function<void(const ControllerPtr&, uint64)> on_input, Callback callback);
+	// all_devices: Dolphin's "All devices" detection (else the selected device only)
+	void start(const EmulatedControllerPtr& controller, uint64 mapping, bool append, MappingControl* control, Callback callback, bool all_devices = false);
+	void start_for_input(const EmulatedControllerPtr& controller, std::function<void(const ControllerPtr&, uint64)> on_input, Callback callback, bool all_devices = true);
+
+	// the devices Detect listens to: the selected device; with all_devices also the extra devices,
+	// then the others (deduplicated, the selected device first)
+	static std::vector<ControllerPtr> candidate_devices(const ControllerPtr& selected, const std::vector<ControllerPtr>& extra, const std::vector<ControllerPtr>& others, bool all_devices);
 	void cancel(const std::string& message = {});
 	bool is_active() const { return m_active; }
+	// the settings window's "All devices" option, for the binding fields' Detect
+	void set_all_devices(bool all) { m_all_devices = all; }
+	bool all_devices() const { return m_all_devices; }
 	MappingControl* control() const { return m_control; }
 
 	// called by the dialog's timer
@@ -61,15 +71,15 @@ private:
 	struct Candidate
 	{
 		ControllerPtr controller;
-		bool attached = false;
 		std::vector<uint32> baseline; // pressed at the start (or still held since)
 	};
 
-	void finish(const ControllerPtr& controller, uint64 input, bool attached);
+	void finish(const ControllerPtr& controller, uint64 input);
 
 	static InputDetector* s_instance;
 
 	bool m_active = false;
+	bool m_all_devices = false;
 	EmulatedControllerPtr m_controller;
 	uint64 m_mapping = 0;
 	bool m_append = false;

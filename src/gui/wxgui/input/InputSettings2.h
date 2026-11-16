@@ -8,19 +8,34 @@
 
 #include <boost/signals2/connection.hpp>
 
+#include <atomic>
+#include <memory>
+#include <string>
+#include <vector>
+
 struct ControllerPage;
 class ControllerBase;
 class InputDetector;
 class wxStaticText;
 
 // Options > Input settings (reworked in this fork, see INPUT_REWORK.md): one tab per emulated
-// controller; each shows its devices with their state and per-device buttons, warnings about
-// conflicting assignments, and the emulated controller's binding fields with live state.
+// controller; each has one device (a dropdown with its state, as in Dolphin), the device's
+// buttons, warnings, and the emulated controller's binding fields with live state.
 class InputSettings2 : public wxDialog
 {
 public:
 	InputSettings2(wxWindow* parent);
 	~InputSettings2();
+
+	// a device the dropdown offers: an instance from its API's provider, or one created when picked
+	// (Keyboard/Mouse; the Remote GamePad, so listing it doesn't start listening on its port)
+	struct DeviceEntry
+	{
+		InputAPI::Type api;
+		std::string uuid;
+		std::string name;
+		std::shared_ptr<ControllerBase> instance;
+	};
 
 private:
 	void grow_to_fit();
@@ -36,9 +51,16 @@ private:
 	wxWindow* initialize_page(size_t index);
 	ControllerPage& get_current_page_data() const;
 
-	// rebuilds the current page: device rows, Remote GamePad options, the binding panel
+	// rebuilds the current page: the device dropdown, Remote GamePad options, the binding panel
 	void update_state();
-	void rebuild_device_rows(ControllerPage& page_data);
+	void rebuild_device_choice(ControllerPage& page_data);
+	// the devices the dropdowns offer, listed by a background thread (providers can be slow)
+	void refresh_devices();
+	std::vector<DeviceEntry> m_available;
+	bool m_refreshing = false;
+	std::shared_ptr<std::atomic_bool> m_alive = std::make_shared<std::atomic_bool>(true);
+	// selects a device for the current page's controller (asks about its default bindings)
+	void select_device(std::shared_ptr<ControllerBase> device);
 	void update_device_status(bool force = false);
 	void update_remote_gamepad_status();
 	void set_status(const wxString& text, bool error = false);
@@ -61,17 +83,17 @@ private:
 	void on_emulated_controller_selected(wxCommandEvent& event);
 	void on_emulated_controller_dropdown(wxCommandEvent& event);
 
-	void on_controller_add(wxCommandEvent& event);
+	void on_device_selected(wxCommandEvent& event);
+	void on_device_other(wxCommandEvent& event);
 	void on_clear_bindings(wxCommandEvent& event);
 	void on_load_preset(wxCommandEvent& event);
 
-	// clicks and the wheel anywhere while the window is open go to the Mouse device (Detect, live
+	// clicks and the wheel anywhere while the window is open go to the Keyboard/Mouse device (Detect, live
 	// fields: the game windows get no events while this modal window is open)
 	std::unique_ptr<class wxEventFilter> m_mouse_filter;
 	void update_settings_mouse();
 
-	// per device
-	void device_defaults(const std::shared_ptr<ControllerBase>& controller);
+	// the selected device
+	void device_defaults();
 	void device_settings(const std::shared_ptr<ControllerBase>& controller);
-	void device_remove(const std::shared_ptr<ControllerBase>& controller);
 };

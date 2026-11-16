@@ -1,6 +1,6 @@
 #pragma once
 
-// Feeds a game window's mouse (and touch) events to the Mouse device (input/MouseState.h; fork, see
+// Feeds a game window's mouse (and touch) events to the Keyboard/Mouse device (input/MouseState.h; fork, see
 // INPUT_REWORK.md). The handlers skip the events, so the windows' own handlers still run.
 
 #include <wx/window.h>

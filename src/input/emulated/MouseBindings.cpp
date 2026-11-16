@@ -77,6 +77,16 @@ namespace MouseBindings
 		return "`" + std::string(kMouseDevice) + ":" + Name(input) + "`";
 	}
 
+	std::string CombinedInputText(uint64_t input)
+	{
+		return "`" + CombinedName(input) + "`";
+	}
+
+	std::string QualifiedMouseText(uint64_t input)
+	{
+		return "`" + std::string(kKeyboardDevice) + ":" + CombinedName(input) + "`";
+	}
+
 	std::map<uint64_t, std::string> ImplicitMouseBindings(std::string_view type, const std::map<uint64_t, std::string>& bindings, bool has_wii_device)
 	{
 		std::map<uint64_t, std::string> result;

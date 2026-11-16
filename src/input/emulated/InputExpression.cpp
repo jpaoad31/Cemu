@@ -123,7 +123,9 @@ namespace InputExpr
 
 		void resolve(Leaf& leaf, const DeviceSet& devices)
 		{
-			leaf.device = find_device(devices, leaf.device_text);
+			leaf.device = leaf.qualified ? find_device(devices, leaf.device_text) : devices.default_device();
+			if (leaf.device != kNoDevice && leaf.device >= devices.device_count())
+				leaf.device = kNoDevice;
 			leaf.input = leaf.device == kNoDevice ? std::nullopt : find_input(devices, leaf.device, leaf.input_text);
 		}
 
@@ -329,17 +331,22 @@ namespace InputExpr
 				{
 					auto n = std::make_shared<Node>();
 					n->kind = Node::kLeaf;
+					// `Input` (the selected device) or `Device:Input`
 					const auto colon = t.text.find(':');
-					if (colon == std::string::npos)
+					if (colon != std::string::npos && looks_like_device(trim(std::string_view(t.text).substr(0, colon))))
 					{
-						fail("input `" + t.text + "` needs a device: `Device:Input`", t.pos);
-						return {};
+						n->leaf.qualified = true;
+						n->leaf.device_text = std::string(trim(std::string_view(t.text).substr(0, colon)));
+						n->leaf.input_text = std::string(trim(std::string_view(t.text).substr(colon + 1)));
 					}
-					n->leaf.device_text = std::string(trim(std::string_view(t.text).substr(0, colon)));
-					n->leaf.input_text = std::string(trim(std::string_view(t.text).substr(colon + 1)));
-					if (n->leaf.device_text.empty() || n->leaf.input_text.empty())
+					else
 					{
-						fail("input `" + t.text + "` needs a device and an input: `Device:Input`", t.pos);
+						n->leaf.qualified = false;
+						n->leaf.input_text = std::string(trim(t.text));
+					}
+					if (n->leaf.input_text.empty())
+					{
+						fail("input `" + t.text + "` needs an input name: `Input` or `Device:Input`", t.pos);
 						return {};
 					}
 					resolve(n->leaf, m_devices);
@@ -497,6 +504,8 @@ namespace InputExpr
 
 		std::string canonical_leaf(const Leaf& leaf, const DeviceSet& devices)
 		{
+			if (!leaf.qualified)
+				return quote_input({}, leaf.resolved() ? input_key(devices, leaf.device, *leaf.input) : leaf.input_text);
 			if (leaf.resolved())
 				return quote_input(device_key(devices, leaf.device), input_key(devices, leaf.device, *leaf.input));
 			if (leaf.device != kNoDevice)
@@ -532,7 +541,8 @@ namespace InputExpr
 			n->kind = Node::kLeaf;
 			n->leaf.device = device;
 			n->leaf.input = id;
-			n->leaf.device_text = device_key(devices, device);
+			n->leaf.qualified = device != devices.default_device();
+			n->leaf.device_text = n->leaf.qualified ? device_key(devices, device) : std::string{};
 			n->leaf.input_text = input_key(devices, device, id);
 			return n;
 		}
@@ -554,6 +564,21 @@ namespace InputExpr
 				root = n;
 			}
 			return root;
+		}
+
+		std::shared_ptr<Node> clone(const Node& n, const std::function<void(Leaf&)>& edit)
+		{
+			auto c = std::make_shared<Node>();
+			c->kind = n.kind;
+			c->op = n.op;
+			c->number = n.number;
+			c->leaf = n.leaf;
+			c->func = n.func;
+			if (n.kind == Node::kLeaf && edit)
+				edit(c->leaf);
+			for (const auto& a : n.args)
+				c->args.emplace_back(clone(*a, edit));
+			return c;
 		}
 
 		void collect_list_items(const std::shared_ptr<Node>& n, std::vector<std::shared_ptr<Node>>& out)
@@ -699,7 +724,24 @@ namespace InputExpr
 
 	std::string quote_input(std::string_view device_text, std::string_view input_text)
 	{
+		if (device_text.empty())
+			return "`" + escape(input_text) + "`";
 		return "`" + escape(device_text) + ":" + escape(input_text) + "`";
+	}
+
+	bool looks_like_device(std::string_view text)
+	{
+		// API name: a letter, then letters/digits/_; optionally /uuid (anything but ':')
+		const auto slash = text.find('/');
+		const auto api = text.substr(0, slash);
+		if (api.empty() || !std::isalpha((unsigned char)api[0]))
+			return false;
+		for (char c : api)
+		{
+			if (!std::isalnum((unsigned char)c) && c != '_')
+				return false;
+		}
+		return slash == std::string_view::npos || slash + 1 < text.size();
 	}
 
 	std::string device_key(const DeviceSet& devices, size_t dev)
@@ -748,10 +790,12 @@ namespace InputExpr
 		std::vector<std::string> result;
 		for (const auto& l : leaves())
 		{
-			if (l.device == kNoDevice)
+			if (l.device == kNoDevice && !l.qualified)
+				result.emplace_back("no device selected for '" + l.input_text + "'");
+			else if (l.device == kNoDevice)
 				result.emplace_back("device not attached: " + l.device_text);
 			else if (!l.input)
-				result.emplace_back(l.device_text + ": unknown input '" + l.input_text + "'");
+				result.emplace_back((l.qualified ? l.device_text + ": unknown input '" : "the device has no input '") + l.input_text + "'");
 		}
 		return result;
 	}
@@ -766,7 +810,7 @@ namespace InputExpr
 		return m_root ? eval_active(*m_root, source) : false;
 	}
 
-	std::string Expression::display(const DeviceSet& devices, bool with_device) const
+	std::string Expression::display(const DeviceSet& devices) const
 	{
 		if (!m_root)
 			return m_text;
@@ -774,10 +818,16 @@ namespace InputExpr
 			std::string name = l.resolved() ? devices.input_name(l.device, *l.input) : l.input_text;
 			if (!l.resolved())
 				name += " (?)";
-			if (with_device || l.device == kNoDevice)
+			if (l.qualified)
 				name += " [" + (l.device == kNoDevice ? l.device_text : devices.device_display_name(l.device)) + "]";
 			return name;
 		});
+	}
+
+	bool Expression::has_qualified_inputs() const
+	{
+		const auto l = leaves();
+		return std::any_of(l.cbegin(), l.cend(), [](const Leaf& leaf) { return leaf.qualified; });
 	}
 
 	bool Expression::is_list() const
@@ -818,17 +868,34 @@ namespace InputExpr
 
 	Expression Expression::remove_device(const Expression& expr, size_t device, const DeviceSet& devices)
 	{
+		return remove_leaves(expr, [device](const Leaf& l) { return l.device == device; }, devices);
+	}
+
+	Expression Expression::remove_leaves(const Expression& expr, const std::function<bool(const Leaf&)>& drop, const DeviceSet& devices, size_t* dropped)
+	{
 		if (!expr.m_root || !expr.is_list())
 			return expr;
 		std::vector<std::shared_ptr<Node>> items, kept;
 		collect_list_items(expr.m_root, items);
 		for (const auto& item : items)
 		{
-			if (item->leaf.device != device)
+			if (!drop(item->leaf))
 				kept.emplace_back(item);
+			else if (dropped)
+				++*dropped;
 		}
 		Expression e;
 		e.m_root = or_chain(kept);
+		e.m_text = canonical(e.m_root, devices);
+		return e;
+	}
+
+	Expression Expression::map_leaves(const Expression& expr, const std::function<void(Leaf&)>& edit, const DeviceSet& devices)
+	{
+		if (!expr.m_root)
+			return expr;
+		Expression e;
+		e.m_root = clone(*expr.m_root, edit);
 		e.m_text = canonical(e.m_root, devices);
 		return e;
 	}

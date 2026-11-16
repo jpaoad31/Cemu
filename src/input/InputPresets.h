@@ -1,8 +1,8 @@
 #pragma once
 
 // Standard binding presets ("Load preset..." in the input settings; fork addition, see
-// INPUT_REWORK.md). Compiled in. A preset replaces the emulated controller's devices and bindings
-// with a usual setup; everything it sets shows in the binding fields and can be edited after.
+// INPUT_REWORK.md). Compiled in. A preset is a device and its bindings: it selects the device and
+// loads a usual setup; everything it sets shows in the binding fields and can be edited after.
 
 #include "input/emulated/EmulatedController.h"
 

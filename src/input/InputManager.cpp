@@ -4,6 +4,8 @@
 #include "input/emulated/BalanceBoardController.h"
 #include "input/emulated/InputProfileBindings.h"
 #include "input/emulated/MouseBindings.h"
+#include "input/emulated/SingleDeviceMigration.h"
+#include "input/emulated/InputExpression.h"
 #include "input/InputDiagnostics.h"
 #include <boost/property_tree/ini_parser.hpp>
 #include <pugixml.hpp>
@@ -32,7 +34,6 @@ InputManager::InputManager()
 #if HAS_KEYBOARD
 	create_provider<KeyboardControllerProvider>();
 #endif
-	create_provider<MouseControllerProvider>();
 #ifdef HAS_SDL
 	create_provider<SDLControllerProvider>();
 #endif
@@ -123,9 +124,16 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 		// custom settings
 		emulated_controller->load(root);
 
-		// bindings: <bindings> (this fork's format, one expression per emulated control) when present,
-		// else the old per-device <mappings> lists, each entry becoming a one-input binding
+		// Devices: the <controller> nodes. Bindings version 3 (one device per emulated controller):
+		// the first node is the selected device. Older profiles had a list of devices whose
+		// bindings were combined: one device is kept, see SingleDeviceMigration.h.
+		const int version = InputProfile::BindingsVersion(root);
 		const bool has_bindings = InputProfile::HasBindings(root);
+		std::map<uint64_t, std::string> bindings;
+		if (has_bindings)
+			bindings = InputProfile::ReadBindings(root);
+		std::vector<SingleDeviceMigration::ProfileDevice> profile_devices;
+		std::vector<pugi::xml_node> device_nodes; // per profile device; empty: added here (the mouse)
 
 		for (const auto controller_node : root.select_nodes("controller"))
 		{
@@ -138,13 +146,35 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 			if (!uuid_node)
 				continue;
 
-			const auto* display_name = cnode.child_value("display_name");
+			const std::string api_name = api_node.child_value();
+			const std::string uuid = uuid_node.child_value();
+			profile_devices.push_back({api_name, uuid, cnode.child_value("display_name")});
+			device_nodes.push_back(cnode);
 
+			// the old format: each device's <mappings>, one input per control, OR'ed per control as
+			// the input rework did (used only when there is no <bindings>)
+			if (!has_bindings)
+			{
+				for (const auto& [mapping, button] : InputProfile::ReadLegacyMappings(cnode))
+				{
+					const auto input = InputExpr::quote_input(api_name + "/" + uuid, fmt::format("#{}", button));
+					auto& text = bindings[mapping];
+					text = text.empty() ? input : text + " | " + input;
+				}
+			}
+		}
+
+		// the device of a <controller> node with its settings (only the kept one is created: a
+		// dropped Remote GamePad mustn't start listening)
+		const auto create_device = [&](const pugi::xml_node& cnode) -> std::shared_ptr<ControllerBase> {
+			const std::string api_name = cnode.child_value("api");
+			// the old separate Mouse device is part of Keyboard/Mouse now
+			if (!cnode || api_name == "Mouse")
+				return ControllerFactory::CreateController(InputAPI::Keyboard, "keyboard", "Keyboard/Mouse");
 			try
 			{
-				const auto api = InputAPI::from_string(api_node.child_value());
-				auto controller = ControllerFactory::CreateController(api, uuid_node.child_value(), display_name);
-				emulated_controller->add_controller(controller);
+				const auto api = InputAPI::from_string(api_name);
+				auto controller = ControllerFactory::CreateController(api, cnode.child_value("uuid"), cnode.child_value("display_name"));
 
 				// load optional settings
 				auto settings = controller->get_settings();
@@ -183,36 +213,70 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 
 				// custom settings
 				controller->load(cnode);
-				
-
-				// old format mappings (also written for older Cemu builds, ignored when <bindings> exists)
-				if (!has_bindings)
-				{
-					for (const auto& [mapping, button] : InputProfile::ReadLegacyMappings(cnode))
-						emulated_controller->set_mapping(mapping, controller, button);
-				}
+				return controller;
 			}
 			catch (const std::exception& ex)
 			{
 				cemuLog_log(LogType::Force, "can't load controller: {}", ex.what());
+				return {};
 			}
-		}
+		};
 
-		if (has_bindings)
+		std::shared_ptr<ControllerBase> device;
+		std::string note;
+		if (version >= MouseBindings::kBindingsVersion)
 		{
-			emulated_controller->clear_mappings();
-			for (const auto& [mapping, text] : InputProfile::ReadBindings(root))
+			if (!device_nodes.empty())
+				device = create_device(device_nodes.front());
+			if (device_nodes.size() > 1)
+				cemuLog_log(LogType::Force, "controller profile {}: {} devices, only the first is used (one device per controller)", _pathToUtf8(file_path), device_nodes.size());
+		}
+		else
+		{
+			// profiles from before the mouse groups: what the mouse did implicitly (GamePad touch and
+			// right-drag tilt, the emulated board's balance) as explicit mouse bindings first
+			if (version < MouseBindings::kMouseBindingsVersion)
 			{
-				if (const auto error = emulated_controller->set_mapping_expression(mapping, text, true))
-					cemuLog_log(LogType::Force, "controller profile {}: binding {} doesn't parse ({}): {}", _pathToUtf8(file_path), mapping, *error, text);
+				const bool has_wii_device = std::any_of(profile_devices.cbegin(), profile_devices.cend(), [](const auto& d) { return d.api == "Wiimote"; });
+				const auto added = MouseBindings::ImplicitMouseBindings(emulated_controller->type_string(), bindings, has_wii_device);
+				if (!added.empty())
+				{
+					profile_devices.push_back({"Mouse", "mouse", "Mouse"});
+					device_nodes.emplace_back();
+					for (const auto& [mapping, text] : added)
+						bindings[mapping] = text;
+					cemuLog_log(LogType::InputAPI, "controller {}: old profile, the mouse's implicit use became {} explicit binding(s)", player_index + 1, added.size());
+				}
 			}
+
+			// one device per controller: keep the main one, drop the others' bindings
+			const auto kept = SingleDeviceMigration::ChooseDevice(profile_devices, bindings);
+			const auto result = SingleDeviceMigration::Migrate(profile_devices, bindings);
+			bindings = result.bindings;
+			if (kept)
+				device = create_device(device_nodes[*kept]);
+			if (profile_devices.size() > 1 || !result.dropped.empty())
+			{
+				std::vector<std::string> dropped;
+				for (const auto& d : result.dropped)
+					dropped.emplace_back(fmt::format("{} ({} input(s))", d.device, d.inputs));
+				cemuLog_log(LogType::Force, "controller profile {}: one device per controller: kept {}, dropped {}{}", _pathToUtf8(file_path),
+					result.device ? fmt::format("{} [{}/{}]", result.device->display_name, result.device->api, result.device->uuid) : std::string("none"), dropped.empty() ? std::string("nothing") : fmt::format("{}", fmt::join(dropped, ", ")),
+					result.advanced_kept ? fmt::format("; {} advanced binding(s) keep other devices explicitly", result.advanced_kept) : std::string());
+			}
+			note = SingleDeviceMigration::Note(result);
+		}
+		{
+			std::scoped_lock lock(m_notes_mutex);
+			m_migration_notes[player_index] = note;
 		}
 
-		// profiles from before the mouse groups: what the mouse did implicitly (GamePad touch and
-		// right-drag tilt, the emulated board's balance) becomes explicit Mouse bindings, so nothing
-		// changes until they're edited (see MouseBindings.h)
-		if (InputProfile::BindingsVersion(root) < MouseBindings::kBindingsVersion)
-			add_implicit_mouse_bindings(*emulated_controller);
+		emulated_controller->set_device(device);
+		for (const auto& [mapping, text] : bindings)
+		{
+			if (const auto error = emulated_controller->set_mapping_expression(mapping, text, true))
+				cemuLog_log(LogType::Force, "controller profile {}: binding {} doesn't parse ({}): {}", _pathToUtf8(file_path), mapping, *error, text);
+		}
 
 		set_controller(emulated_controller);
 		return true;
@@ -224,21 +288,10 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 	}
 }
 
-void InputManager::add_implicit_mouse_bindings(EmulatedController& emulated_controller)
+std::string InputManager::take_migration_note(size_t player_index)
 {
-	std::map<uint64_t, std::string> bindings;
-	for (const auto mapping : emulated_controller.get_mapping_ids())
-		bindings[mapping] = emulated_controller.get_mapping_expression(mapping);
-	const auto& devices = emulated_controller.get_controllers();
-	const bool has_wii_device = std::any_of(devices.cbegin(), devices.cend(), [](const auto& c) { return c->api() == InputAPI::Wiimote; });
-	const auto added = MouseBindings::ImplicitMouseBindings(emulated_controller.type_string(), bindings, has_wii_device);
-	if (added.empty())
-		return;
-	if (std::none_of(devices.cbegin(), devices.cend(), [](const auto& c) { return c->api() == InputAPI::Mouse; }))
-		emulated_controller.add_controller(ControllerFactory::CreateController(InputAPI::Mouse, "mouse", "Mouse"));
-	for (const auto& [mapping, text] : added)
-		emulated_controller.set_mapping_expression(mapping, text);
-	cemuLog_log(LogType::InputAPI, "controller {}: old profile, the mouse's implicit use became {} explicit binding(s)", emulated_controller.player_index() + 1, added.size());
+	std::scoped_lock lock(m_notes_mutex);
+	return std::exchange(m_migration_notes[player_index], {});
 }
 
 bool InputManager::migrate_config(const fs::path& file_path)
@@ -511,7 +564,9 @@ bool InputManager::save(size_t player_index, std::string_view filename)
 	// custom settings
 	emulated_controller->save(emulated_controller_node);
 
-	for (const auto& controller : emulated_controller->get_controllers())
+	// the selected device (one per emulated controller; devices named explicitly in bindings are
+	// attached from the binding text when loading)
+	if (const auto controller = emulated_controller->get_device())
 	{
 		auto controller_node = emulated_controller_node.append_child("controller");
 
@@ -555,8 +610,8 @@ bool InputManager::save(size_t player_index, std::string_view filename)
 		// custom settings
 		controller->save(controller_node);
 
-		// mappings for current controller, in the old format (one input per control and device), so
-		// Cemu builds without the bindings rework still load the profile
+		// the device's inputs in the old format (one input per control), so Cemu builds without the
+		// bindings rework still load the profile
 		std::vector<std::pair<uint64_t, uint64_t>> legacy;
 		for (const auto mapping : emulated_controller->get_mapping_ids())
 		{
@@ -592,14 +647,9 @@ EmulatedControllerPtr InputManager::set_controller(EmulatedControllerPtr control
 {
 	auto prev_controller = delete_controller(controller->player_index());
 
-	// assign controllers to new emulated controller if empty
-	if (prev_controller && controller->get_controllers().empty())
-	{
-		for (const auto& c : prev_controller->get_controllers())
-		{
-			controller->add_controller(c);
-		}
-	}
+	// a new emulated controller without a device takes over the previous one's
+	if (prev_controller && !controller->get_device())
+		controller->set_device(prev_controller->get_device());
 
 	// try to connect all controllers
 	/*for (auto& c : controller->get_controllers())
@@ -693,7 +743,7 @@ EmulatedControllerPtr InputManager::set_controller(size_t player_index, Emulated
 {
 	auto result = set_controller(player_index, type);
 	if (result)
-		result->add_controller(controller);
+		result->set_device(controller);
 
 	return result;
 }

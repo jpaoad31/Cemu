@@ -16,14 +16,10 @@ WPADController::WPADController(size_t player_index, WPADDataFormat data_format)
 std::shared_ptr<NativeWiimoteController> WPADController::get_native_wiimote() const
 {
 #ifdef SUPPORTS_WIIMOTE
+	// the selected device only (one device per emulated controller)
 	std::shared_lock lock(m_mutex);
-	for (const auto& controller : m_controllers)
-	{
-		if (controller->api() != InputAPI::Wiimote)
-			continue;
-		if (auto wiimote = std::dynamic_pointer_cast<NativeWiimoteController>(controller))
-			return wiimote;
-	}
+	if (m_device && m_device->api() == InputAPI::Wiimote)
+		return std::dynamic_pointer_cast<NativeWiimoteController>(m_device);
 #endif
 	return {};
 }

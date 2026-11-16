@@ -28,7 +28,7 @@ BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 
 	auto* main_sizer = new wxBoxSizer(wxVERTICAL);
 
-	auto* info = new wxStaticText(this, wxID_ANY, _("The Balance Board always uses Wii Remote channel 4 (WPAD channel 3). Use a Wiimote on another controller for the menus.\nReal board: connect it (through a Wii BT Bridge, below on macOS, or pair it in the Bluetooth settings), then add it here with API \"Wiimote\". While that device is a connected Balance Board it is the source and the options below are unused; if it is a Wii Remote or not connected, the emulated board is used and the line at the bottom says why."));
+	auto* info = new wxStaticText(this, wxID_ANY, _("The Balance Board always uses Wii Remote channel 4 (WPAD channel 3). Use a Wiimote on another controller for the menus.\nReal board: connect it (through a Wii BT Bridge, below on macOS, or pair it in the Bluetooth settings), then choose it as the device above (Refresh, or Other device... > Wiimote). While the device is a connected Balance Board it is the source and the options below are unused; with Keybo/Mouse or a pad the board is emulated; a Wii Remote or a board that isn't connected falls back to the emulated board and the line at the bottom says why."));
 	info->Wrap(600);
 	main_sizer->Add(info, 0, wxALL, 5);
 
@@ -81,7 +81,7 @@ BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 	row = 0;
 	column += 3;
 	text = new wxStaticText(this, wxID_ANY, _("Centre of balance"));
-	text->SetToolTip(_("Where the weight is (like a stick). Default with the Mouse device: the cursor over the TV window (up is the front). Clear it, or bind keys or a stick, so the mouse doesn't shift the weight."));
+	text->SetToolTip(_("Where the weight is (like a stick). Default with the Keyboard/Mouse device: the cursor over the TV window (up is the front). With a real board as the device its sensors are used instead."));
 	text->SetFont(bold_font);
 	m_item_sizer->Add(text, wxGBPosition(row, column), wxGBSpan(1, 2), wxALL | wxEXPAND, 5);
 	for (const auto id : {BalanceBoardController::kButtonId_Balance_Up, BalanceBoardController::kButtonId_Balance_Down,

@@ -390,12 +390,12 @@ bool HotkeySettings::SetActiveController(void)
 	{
 		return false;
 	}
-	const auto& controllers = emulatedController->get_controllers();
-	if (controllers.empty())
+	auto device = emulatedController->get_device();
+	if (!device)
 	{
 		return false;
 	}
-	m_activeController = controllers.at(0);
+	m_activeController = std::move(device);
 	return true;
 }
 

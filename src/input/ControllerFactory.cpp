@@ -7,7 +7,6 @@
 #include "input/emulated/BalanceBoardController.h"
 
 #include "input/api/Keyboard/KeyboardController.h"
-#include "input/api/Mouse/MouseController.h"
 #include "input/api/DSU/DSUController.h"
 #include "input/api/GameCube/GameCubeController.h"
 #include "input/api/RemoteGamePad/RemoteGamePadController.h"
@@ -34,8 +33,6 @@ ControllerPtr ControllerFactory::CreateController(InputAPI::Type api, std::strin
 	case InputAPI::Keyboard:
 		return std::make_shared<KeyboardController>();
 #endif
-	case InputAPI::Mouse:
-		return std::make_shared<MouseController>();
 #if HAS_DIRECTINPUT
 	case InputAPI::DirectInput:
 		{
@@ -157,8 +154,6 @@ ControllerProviderPtr ControllerFactory::CreateControllerProvider(InputAPI::Type
 	case InputAPI::Keyboard:
 		return std::make_shared<KeyboardControllerProvider>();
 #endif
-	case InputAPI::Mouse:
-		return std::make_shared<MouseControllerProvider>();
 #ifdef HAS_SDL
 	case InputAPI::SDLController:
 		return std::make_shared<SDLControllerProvider>();

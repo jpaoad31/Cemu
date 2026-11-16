@@ -18,6 +18,8 @@
 #include <wx/scrolwin.h>
 #include <wx/display.h>
 #include <wx/msgdlg.h>
+#include <wx/checkbox.h>
+#include <wx/app.h>
 
 #include "config/ActiveSettings.h"
 #include "config/CemuConfig.h"
@@ -63,19 +65,21 @@ struct ControllerPage
 	// emulated controller
 	wxComboBox* m_emulated_controller;
 
-	// devices
+	// the device (one per emulated controller)
 	wxStaticBoxSizer* m_devices_box = nullptr;
-	wxBoxSizer* m_device_rows = nullptr;
-	struct DeviceRow
-	{
-		std::shared_ptr<ControllerBase> controller;
-		wxStaticText* status = nullptr;
-	};
-	std::vector<DeviceRow> m_rows;
-	wxButton* m_add = nullptr;
+	wxChoice* m_device_choice = nullptr;
+	std::vector<InputSettings2::DeviceEntry> m_choice_entries; // item i + 1 (item 0: none)
+	wxButton* m_refresh = nullptr;
+	wxButton* m_other = nullptr;
+	wxCheckBox* m_all_devices = nullptr;
+	wxStaticText* m_device_status = nullptr;
+	wxButton* m_defaults = nullptr;
+	wxButton* m_settings = nullptr;
+	wxButton* m_calibrate = nullptr;
 	wxButton* m_clear = nullptr;
 	wxButton* m_preset = nullptr;
 	wxStaticText* m_warnings = nullptr;
+	wxStaticText* m_note = nullptr; // the migration note of an old profile (shown until the window closes)
 
 	// Remote GamePad (shown while one is attached)
 	wxStaticText* m_remote_status = nullptr; // port, phone, packet rate
@@ -109,7 +113,7 @@ InputSettings2::InputSettings2(wxWindow* parent)
 	m_notebook->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED, &InputSettings2::on_controller_page_changed, this);
 	sizer->Add(m_notebook, 1, wxEXPAND);
 
-	m_status_line = new wxStaticText(this, wxID_ANY, _("Click a binding and press an input on any device to bind it. Shift-click adds an input; right click for more."));
+	m_status_line = new wxStaticText(this, wxID_ANY, _("Click a binding and press an input on the controller's device to bind it. Shift-click adds an input; right click for more."));
 	sizer->Add(m_status_line, 0, wxALL | wxEXPAND, FromDIP(6));
 
 	m_notebook->SetSelection(0);
@@ -128,8 +132,9 @@ InputSettings2::InputSettings2(wxWindow* parent)
 	m_timer->Start(25);
 
 	m_controller_changed = EventService::instance().connect<Events::ControllerChanged>(&InputSettings2::on_controller_changed, this);
+	refresh_devices();
 
-	// the wheel anywhere in this window (and its dialogs) goes to the Mouse device while it's open
+	// the wheel anywhere in this window (and its dialogs) goes to the Keyboard/Mouse device while it's open
 	struct WheelFilter : wxEventFilter
 	{
 		int FilterEvent(wxEvent& event) override
@@ -152,6 +157,7 @@ InputSettings2::InputSettings2(wxWindow* parent)
 
 InputSettings2::~InputSettings2()
 {
+	*m_alive = false;
 	wxEvtHandler::RemoveFilter(m_mouse_filter.get());
 	MouseState::Get().set_settings_buttons(0, false);
 	m_controller_changed.disconnect();
@@ -278,27 +284,68 @@ wxWindow* InputSettings2::initialize_page(size_t index)
 	}
 
 	{
-		// devices: every device of this emulated controller is active at once; their inputs are
-		// combined per binding
-		auto* box = new wxStaticBoxSizer(wxVERTICAL, page, _("Devices (all of them are used together)"));
+		// the device: plain bindings are its inputs, Detect listens to it (Dolphin's model)
+		auto* box = new wxStaticBoxSizer(wxVERTICAL, page, _("Device"));
 		page_data.m_devices_box = box;
-		page_data.m_device_rows = new wxBoxSizer(wxVERTICAL);
-		box->Add(page_data.m_device_rows, 0, wxEXPAND);
+		auto* parent0 = box->GetStaticBox();
+
+		auto* row = new wxBoxSizer(wxHORIZONTAL);
+		page_data.m_device_choice = new wxChoice(parent0, wxID_ANY);
+		page_data.m_device_choice->SetMinSize(FromDIP(wxSize(300, -1)));
+		page_data.m_device_choice->SetToolTip(_("This controller's device. Bindings without a device name are its inputs, and its own data (motion, touch, the Wii Remote's pointer, a real board) is used. Another device's input can still be named explicitly in a binding's Advanced... editor."));
+		page_data.m_device_choice->Bind(wxEVT_CHOICE, &InputSettings2::on_device_selected, this);
+		row->Add(page_data.m_device_choice, 1, wxALIGN_CENTER_VERTICAL | wxALL, gap);
+		page_data.m_refresh = new wxButton(parent0, wxID_ANY, _("Refresh"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+		page_data.m_refresh->SetToolTip(_("Look for connected devices again."));
+		page_data.m_refresh->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { refresh_devices(); });
+		row->Add(page_data.m_refresh, 0, wxALIGN_CENTER_VERTICAL | wxALL, gap);
+		page_data.m_other = new wxButton(parent0, wxID_ANY, _("Other device..."), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+		page_data.m_other->SetToolTip(_("A device by API: a DSU client (IP and port), a Remote GamePad on another port, ..."));
+		page_data.m_other->Bind(wxEVT_BUTTON, &InputSettings2::on_device_other, this);
+		row->Add(page_data.m_other, 0, wxALIGN_CENTER_VERTICAL | wxALL, gap);
+		page_data.m_all_devices = new wxCheckBox(parent0, wxID_ANY, _("Detect on all devices"));
+		page_data.m_all_devices->SetToolTip(_("Detect listens to every device, not only this controller's. An input of another device is written with its device name (an explicit, advanced binding)."));
+		page_data.m_all_devices->SetValue(m_detector->all_devices());
+		page_data.m_all_devices->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent& e) { m_detector->cancel(); m_detector->set_all_devices(e.IsChecked()); });
+		row->Add(page_data.m_all_devices, 0, wxALIGN_CENTER_VERTICAL | wxALL, gap);
+		box->Add(row, 0, wxEXPAND);
+
+		page_data.m_device_status = new wxStaticText(parent0, wxID_ANY, wxEmptyString);
+		box->Add(page_data.m_device_status, 0, wxLEFT | wxRIGHT | wxEXPAND, gap * 2);
 
 		auto* buttons = new wxBoxSizer(wxHORIZONTAL);
-		page_data.m_add = new wxButton(box->GetStaticBox(), wxID_ANY, _("Add device..."));
-		page_data.m_add->SetToolTip(_("Add a keyboard, gamepad, Wii Remote / Balance Board, DSU client or Remote GamePad. Its default bindings are added where it has none; other devices' bindings are kept."));
-		page_data.m_add->Bind(wxEVT_BUTTON, &InputSettings2::on_controller_add, this);
-		buttons->Add(page_data.m_add, 0, wxALL, gap);
-		page_data.m_clear = new wxButton(box->GetStaticBox(), wxID_ANY, _("Clear all bindings"));
+		page_data.m_defaults = new wxButton(parent0, wxID_ANY, _("Default bindings"));
+		page_data.m_defaults->SetToolTip(_("Replace all bindings of this controller with the device's defaults."));
+		page_data.m_defaults->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { device_defaults(); });
+		buttons->Add(page_data.m_defaults, 0, wxALL, gap);
+		page_data.m_settings = new wxButton(parent0, wxID_ANY, _("Settings..."));
+		page_data.m_settings->SetToolTip(_("Dead zones, ranges, rumble, motion; Wii Remote options (speaker, ...)."));
+		page_data.m_settings->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+			auto& data = get_current_page_data();
+			if (const auto device = data.m_controller ? data.m_controller->get_device() : nullptr)
+				device_settings(device);
+		});
+		buttons->Add(page_data.m_settings, 0, wxALL, gap);
+		page_data.m_calibrate = new wxButton(parent0, wxID_ANY, _("Calibrate"));
+		page_data.m_calibrate->SetToolTip(_("Take the current stick and trigger positions as the rest position."));
+		page_data.m_calibrate->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+			auto& data = get_current_page_data();
+			if (const auto device = data.m_controller ? data.m_controller->get_device() : nullptr)
+			{
+				device->calibrate();
+				set_status(wxString::Format(_("%s calibrated."), wxString::FromUTF8(device->display_name())));
+			}
+		});
+		buttons->Add(page_data.m_calibrate, 0, wxALL, gap);
+		page_data.m_clear = new wxButton(parent0, wxID_ANY, _("Clear all bindings"));
 		page_data.m_clear->Bind(wxEVT_BUTTON, &InputSettings2::on_clear_bindings, this);
 		buttons->Add(page_data.m_clear, 0, wxALL, gap);
-		page_data.m_preset = new wxButton(box->GetStaticBox(), wxID_ANY, _("Load preset..."));
-		page_data.m_preset->SetToolTip(_("Replace the devices and bindings with a standard setup (keyboard + mouse, Remote GamePad, a gamepad, a real Wii Remote or board). Everything shows in the fields below and can be edited after."));
+		page_data.m_preset = new wxButton(parent0, wxID_ANY, _("Load preset..."));
+		page_data.m_preset->SetToolTip(_("A device and its bindings in one step (Keyboard/Mouse, Remote GamePad, a gamepad, a real Wii Remote or board). Everything shows in the fields below and can be edited after."));
 		page_data.m_preset->Bind(wxEVT_BUTTON, &InputSettings2::on_load_preset, this);
 		buttons->Add(page_data.m_preset, 0, wxALL, gap);
 #ifdef HAS_BLUEZ
-		auto* pairing = new wxButton(box->GetStaticBox(), wxID_ANY, _("Pair Wii/Wii U Controller"));
+		auto* pairing = new wxButton(parent0, wxID_ANY, _("Pair Wii/Wii U Controller"));
 		pairing->Bind(wxEVT_BUTTON, [this](wxEvent&) {
 			PairingDialog pairing_dialog(this);
 			pairing_dialog.ShowModal();
@@ -358,6 +405,12 @@ wxWindow* InputSettings2::initialize_page(size_t index)
 		page_data.m_warnings->Hide();
 		box->Add(page_data.m_warnings, 0, wxALL | wxEXPAND, gap);
 
+		// an old profile with several devices on this controller: what was dropped (once)
+		page_data.m_note = new wxStaticText(parent, wxID_ANY, wxEmptyString);
+		page_data.m_note->SetForegroundColour(wxTheColourDatabase->Find("ERROR"));
+		page_data.m_note->Hide();
+		box->Add(page_data.m_note, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, gap);
+
 		sizer->Add(box, 0, wxEXPAND | wxALL, gap);
 	}
 
@@ -385,54 +438,105 @@ void InputSettings2::set_status(const wxString& text, bool error)
 	m_status_line->Refresh();
 }
 
-void InputSettings2::rebuild_device_rows(ControllerPage& page_data)
+namespace
 {
-	auto* parent = page_data.m_devices_box->GetStaticBox();
-	page_data.m_device_rows->Clear(true);
-	page_data.m_rows.clear();
-	const int gap = FromDIP(3);
-
-	if (!page_data.m_controller)
+	bool same_device(const InputSettings2::DeviceEntry& e, const ControllerBase& c)
 	{
-		page_data.m_device_rows->Add(new wxStaticText(parent, wxID_ANY, _("Choose an emulated controller above to add devices.")), 0, wxALL, gap);
-		return;
+		return e.api == c.api() && e.uuid == c.uuid();
 	}
-	const auto& devices = page_data.m_controller->get_controllers();
-	if (devices.empty())
-		page_data.m_device_rows->Add(new wxStaticText(parent, wxID_ANY, _("No device yet: add one, or click a binding below and press a key or a gamepad button.")), 0, wxALL, gap);
+}
 
-	for (const auto& c : devices)
+void InputSettings2::rebuild_device_choice(ControllerPage& page_data)
+{
+	auto* choice = page_data.m_device_choice;
+	const auto current = page_data.m_controller ? page_data.m_controller->get_device() : nullptr;
+
+	// the devices found, the current one in its place (or first when it isn't found)
+	std::vector<DeviceEntry> entries;
+	bool found = false;
+	for (const auto& e : m_available)
 	{
-		auto* row = new wxBoxSizer(wxHORIZONTAL);
-		auto* name = new wxStaticText(parent, wxID_ANY, wxString::FromUTF8(fmt::format("{}  [{}]", c->display_name(), c->api_name())));
-		name->SetFont(name->GetFont().Bold());
-		row->Add(name, 0, wxALIGN_CENTER_VERTICAL | wxALL, gap);
-		auto* status = new wxStaticText(parent, wxID_ANY, wxEmptyString);
-		status->SetMinSize(FromDIP(wxSize(170, -1)));
-		row->Add(status, 1, wxALIGN_CENTER_VERTICAL | wxALL, gap);
-
-		auto* defaults = new wxButton(parent, wxID_ANY, _("Default bindings"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
-		defaults->SetToolTip(_("Replace this device's bindings with its defaults (other devices' bindings are kept)."));
-		defaults->Bind(wxEVT_BUTTON, [this, c](wxCommandEvent&) { device_defaults(c); });
-		row->Add(defaults, 0, wxALIGN_CENTER_VERTICAL | wxALL, gap);
-		if (c->api() != InputAPI::Keyboard && c->api() != InputAPI::Mouse)
+		if (current && same_device(e, *current))
 		{
-			auto* settings = new wxButton(parent, wxID_ANY, _("Settings..."), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
-			settings->SetToolTip(_("Dead zones, ranges, rumble, motion; Wii Remote options (speaker, ...)."));
-			settings->Bind(wxEVT_BUTTON, [this, c](wxCommandEvent&) { device_settings(c); });
-			row->Add(settings, 0, wxALIGN_CENTER_VERTICAL | wxALL, gap);
-			auto* calibrate = new wxButton(parent, wxID_ANY, _("Calibrate"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
-			calibrate->SetToolTip(_("Take the current stick and trigger positions as the rest position."));
-			calibrate->Bind(wxEVT_BUTTON, [this, c](wxCommandEvent&) { c->calibrate(); set_status(wxString::Format(_("%s calibrated."), wxString::FromUTF8(c->display_name()))); });
-			row->Add(calibrate, 0, wxALIGN_CENTER_VERTICAL | wxALL, gap);
+			entries.push_back({current->api(), current->uuid(), current->display_name(), current});
+			found = true;
 		}
-		auto* remove = new wxButton(parent, wxID_ANY, _("Remove"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
-		remove->Bind(wxEVT_BUTTON, [this, c](wxCommandEvent&) { device_remove(c); });
-		row->Add(remove, 0, wxALIGN_CENTER_VERTICAL | wxALL, gap);
-
-		page_data.m_device_rows->Add(row, 0, wxEXPAND);
-		page_data.m_rows.push_back({c, status});
+		else
+			entries.push_back(e);
 	}
+	if (current && !found)
+		entries.insert(entries.begin(), {current->api(), current->uuid(), current->display_name(), current});
+
+	wxArrayString labels;
+	labels.Add(_("None"));
+	int selection = 0;
+	for (size_t i = 0; i < entries.size(); ++i)
+	{
+		const auto& e = entries[i];
+		std::string label = e.api == InputAPI::Keyboard ? e.name : fmt::format("{}  [{}]", e.name, InputAPI::to_string(e.api));
+		if (current && same_device(e, *current))
+		{
+			selection = (int)i + 1;
+			if (!found && !m_refreshing)
+				label += "  (not found)";
+		}
+		labels.Add(wxString::FromUTF8(label));
+	}
+	page_data.m_choice_entries = std::move(entries);
+	if (choice->GetStrings() != labels)
+	{
+		choice->Set(labels);
+		page_data.page->Layout();
+	}
+	choice->SetSelection(selection);
+	choice->Enable(page_data.m_controller != nullptr);
+}
+
+void InputSettings2::refresh_devices()
+{
+	if (m_refreshing)
+		return;
+	m_refreshing = true;
+
+	// the providers, taken here (the list grows on this thread when a device of a new DSU host or
+	// Remote GamePad port is created)
+	std::vector<ControllerProviderPtr> providers;
+	for (const auto& list : InputManager::instance().get_api_providers())
+	{
+		for (const auto& p : list)
+		{
+			if (p->api() != InputAPI::Keyboard && p->api() != InputAPI::RemoteGamePad)
+				providers.push_back(p);
+		}
+	}
+	std::thread([this, alive = m_alive, providers = std::move(providers)] {
+		std::vector<DeviceEntry> list;
+		list.push_back({InputAPI::Keyboard, "keyboard", "Keyboard/Mouse", nullptr});
+#if HAS_REMOTE_GAMEPAD
+		// listed without an instance: creating one starts listening on its port
+		list.push_back({InputAPI::RemoteGamePad, std::to_string(RemoteGamePad::kDefaultPort), fmt::format("Remote GamePad (UDP {})", RemoteGamePad::kDefaultPort), nullptr});
+#endif
+		for (const auto& provider : providers)
+		{
+			try
+			{
+				for (const auto& c : provider->get_controllers())
+					list.push_back({c->api(), c->uuid(), c->display_name(), c});
+			}
+			catch (const std::exception& ex)
+			{
+				cemuLog_log(LogType::InputAPI, "input settings: can't list {} devices: {}", provider->api_name(), ex.what());
+			}
+		}
+		wxTheApp->CallAfter([this, alive, list = std::move(list)]() mutable {
+			if (!*alive)
+				return;
+			m_available = std::move(list);
+			m_refreshing = false;
+			if (m_notebook->GetCurrentPage() && m_notebook->GetCurrentPage()->GetClientObject())
+				rebuild_device_choice(get_current_page_data());
+		});
+	}).detach();
 }
 
 void InputSettings2::update_state()
@@ -454,10 +558,24 @@ void InputSettings2::update_state()
 	else
 		page_data.m_emulated_controller->SetSelection(0);
 
-	page_data.m_add->Enable(emulated_controller != nullptr);
+	const auto device = emulated_controller ? emulated_controller->get_device() : nullptr;
+	const bool pad = device && device->api() != InputAPI::Keyboard;
+	page_data.m_other->Enable(emulated_controller != nullptr);
+	page_data.m_defaults->Enable(device != nullptr);
+	page_data.m_settings->Enable(pad);
+	page_data.m_calibrate->Enable(pad);
 	page_data.m_clear->Enable(emulated_controller != nullptr);
 	page_data.m_preset->Enable(emulated_controller != nullptr);
-	rebuild_device_rows(page_data);
+	page_data.m_all_devices->SetValue(m_detector->all_devices());
+	rebuild_device_choice(page_data);
+
+	// an old profile's dropped devices (InputManager::load), shown until the window closes
+	if (const auto note = InputManager::instance().take_migration_note(page_data.index); !note.empty())
+	{
+		page_data.m_note->SetLabel(wxString::FromUTF8(note));
+		page_data.m_note->Wrap(FromDIP(700));
+		page_data.m_note->Show();
+	}
 
 	// binding panel
 	for (auto* panel : page_data.m_panels)
@@ -485,7 +603,7 @@ void InputSettings2::update_state()
 			panel->set_status_handler([this](const wxString& text, bool error) { set_status(text, error); });
 			panel->set_devices_changed_handler([this] {
 				auto& data = get_current_page_data();
-				rebuild_device_rows(data);
+				rebuild_device_choice(data);
 				update_device_status(true);
 				data.page->Layout();
 				data.page->FitInside();
@@ -545,20 +663,26 @@ void InputSettings2::update_device_status(bool force)
 	auto& page_data = get_current_page_data();
 
 	bool relayout = false;
-	for (auto& row : page_data.m_rows)
 	{
-		const bool connected = InputDiagnostics::IsDeviceConnected(*row.controller);
-		const auto text = wxString::FromUTF8(InputDiagnostics::DeviceStatus(*row.controller));
-		if (row.status->GetLabel() != text)
+		const auto device = page_data.m_controller ? page_data.m_controller->get_device() : nullptr;
+		const bool connected = device && InputDiagnostics::IsDeviceConnected(*device);
+		wxString text;
+		if (!page_data.m_controller)
+			text = _("Choose an emulated controller above.");
+		else if (!device)
+			text = _("No device: choose one above (Keyboard/Mouse, a gamepad, the Remote GamePad, a Wii device).");
+		else
+			text = wxString::FromUTF8(fmt::format("{}: {}", device->display_name(), InputDiagnostics::DeviceStatus(*device)));
+		if (page_data.m_device_status->GetLabel() != text)
 		{
-			row.status->SetLabel(text);
+			page_data.m_device_status->SetLabel(text);
 			relayout = true;
 		}
 		const wxColour colour = connected ? wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT) : wxTheColourDatabase->Find("ERROR");
-		if (row.status->GetForegroundColour() != colour)
+		if (page_data.m_device_status->GetForegroundColour() != colour)
 		{
-			row.status->SetForegroundColour(colour);
-			row.status->Refresh();
+			page_data.m_device_status->SetForegroundColour(colour);
+			page_data.m_device_status->Refresh();
 		}
 	}
 
@@ -594,15 +718,10 @@ void InputSettings2::update_remote_gamepad_status()
 	auto& page_data = get_current_page_data();
 	auto* text = page_data.m_remote_status;
 
+	// the phone's options while the Remote GamePad is this controller's device
 	std::shared_ptr<RemoteGamePadController> remote;
 	if (page_data.m_controller)
-	{
-		for (const auto& c : page_data.m_controller->get_controllers())
-		{
-			if ((remote = std::dynamic_pointer_cast<RemoteGamePadController>(c)))
-				break;
-		}
-	}
+		remote = std::dynamic_pointer_cast<RemoteGamePadController>(page_data.m_controller->get_device());
 	const bool media = remote && RemoteGamePad::Media::IsSupported();
 	bool relayout = false;
 	for (wxChoice* c : {page_data.m_remote_camera, page_data.m_remote_mic, page_data.m_remote_speaker, page_data.m_remote_video})
@@ -647,9 +766,10 @@ void InputSettings2::update_remote_gamepad_status()
 
 void InputSettings2::on_controller_changed()
 {
-	// devices came or went: refresh the state column
+	// devices came or went: refresh the state and the device list
 	if (m_notebook->GetCurrentPage() && m_notebook->GetCurrentPage()->GetClientObject())
 		update_device_status(true);
+	refresh_devices();
 }
 
 void InputSettings2::on_char_hook(wxKeyEvent& event)
@@ -671,7 +791,7 @@ void InputSettings2::on_timer(wxTimerEvent&)
 	if (!page_data.m_controller)
 		return;
 
-	// live state of every device of this controller
+	// live state of the device (and the devices bindings name explicitly)
 	for (const auto& c : page_data.m_controller->get_controllers())
 		InputDetector::update_device(*c);
 
@@ -708,11 +828,12 @@ void InputSettings2::on_emulated_controller_selected(wxCommandEvent& event)
 			if (page_data.m_controller && page_data.m_controller->type() == type)
 				return;
 
-			// the new emulated controller takes over the previous one's devices (set_controller)
+			// the new emulated controller takes over the previous one's device (set_controller)
+			// with that device's defaults for the new type
 			const auto new_controller = InputManager::instance().set_controller(page_index, type);
 			page_data.m_controller = new_controller;
-			for (const auto& c : new_controller->get_controllers())
-				new_controller->set_default_mapping(c);
+			if (new_controller)
+				new_controller->load_default_bindings();
 		}
 		catch (const std::exception&)
 		{
@@ -722,25 +843,91 @@ void InputSettings2::on_emulated_controller_selected(wxCommandEvent& event)
 	update_state();
 }
 
-void InputSettings2::on_controller_add(wxCommandEvent& event)
+void InputSettings2::on_device_selected(wxCommandEvent& event)
+{
+	auto& page_data = get_current_page_data();
+	if (!page_data.m_controller)
+		return;
+	m_detector->cancel();
+	const int selection = page_data.m_device_choice->GetSelection();
+	std::shared_ptr<ControllerBase> device;
+	if (selection >= 1 && selection <= (int)page_data.m_choice_entries.size())
+	{
+		const auto& e = page_data.m_choice_entries[selection - 1];
+		device = e.instance;
+		if (!device)
+		{
+			try
+			{
+				device = ControllerFactory::CreateController(e.api, e.uuid, e.name);
+			}
+			catch (const std::exception& ex)
+			{
+				set_status(wxString::FromUTF8(fmt::format("Can't use {}: {}", e.name, ex.what())), true);
+				update_state();
+				return;
+			}
+		}
+	}
+	select_device(device);
+}
+
+void InputSettings2::on_device_other(wxCommandEvent& event)
 {
 	auto& page_data = get_current_page_data();
 	if (!page_data.m_controller)
 		return;
 	m_detector->cancel();
 
-	InputAPIAddWindow wnd(this, wxGetMousePosition() + wxSize(5, 5), page_data.m_controller->get_controllers());
+	std::vector<ControllerPtr> current;
+	if (const auto device = page_data.m_controller->get_device())
+		current.push_back(device);
+	InputAPIAddWindow wnd(this, wxGetMousePosition() + wxSize(5, 5), current);
 	if (wnd.ShowModal() != wxID_OK)
 		return;
 	wxASSERT(wnd.is_valid());
+	select_device(wnd.get_controller());
+}
 
-	const auto controller = wnd.get_controller();
-	controller->connect();
-	page_data.m_controller->add_controller(controller);
-	// defaults only where this device has nothing yet; other devices' bindings are kept
-	const bool added = page_data.m_controller->set_default_mapping(controller);
-	set_status(added ? wxString::Format(_("Added %s with its default bindings."), wxString::FromUTF8(controller->display_name()))
-		: wxString::Format(_("Added %s (no default bindings for this controller type)."), wxString::FromUTF8(controller->display_name())));
+void InputSettings2::select_device(std::shared_ptr<ControllerBase> device)
+{
+	auto& page_data = get_current_page_data();
+	const auto& controller = page_data.m_controller;
+	if (!controller)
+		return;
+	const auto previous = controller->get_device();
+	if ((!previous && !device) || (previous && device && *previous == *device))
+	{
+		update_state();
+		return;
+	}
+
+	// Dolphin keeps the bindings when the device changes (`X` now means the new device's X); the
+	// device's defaults are offered (loaded right away when there are no bindings)
+	const bool had_bindings = !controller->get_mapping_ids().empty();
+	controller->set_device(device);
+	if (!device)
+		set_status(_("No device: only bindings that name a device explicitly work."));
+	else if (!had_bindings)
+	{
+		const bool loaded = controller->load_default_bindings();
+		set_status(loaded ? wxString::Format(_("%s selected, with its default bindings."), wxString::FromUTF8(device->display_name()))
+			: wxString::Format(_("%s selected (no default bindings for this controller type)."), wxString::FromUTF8(device->display_name())));
+	}
+	else
+	{
+		const bool other_kind = !previous || previous->api() != device->api();
+		const int answer = wxMessageBox(wxString::Format(_("Load the default bindings of %s?\n\nYes: replace this controller's bindings with the device's defaults.\nNo: keep the bindings; they now refer to %s (inputs it doesn't have show with ?)."),
+			wxString::FromUTF8(device->display_name()), wxString::FromUTF8(device->display_name())),
+			_("Device changed"), wxYES_NO | (other_kind ? wxYES_DEFAULT : wxNO_DEFAULT) | wxICON_QUESTION, this);
+		if (answer == wxYES)
+		{
+			controller->load_default_bindings();
+			set_status(wxString::Format(_("%s selected, with its default bindings."), wxString::FromUTF8(device->display_name())));
+		}
+		else
+			set_status(wxString::Format(_("%s selected; the bindings were kept."), wxString::FromUTF8(device->display_name())));
+	}
 	update_state();
 }
 
@@ -749,7 +936,7 @@ void InputSettings2::on_clear_bindings(wxCommandEvent& event)
 	auto& page_data = get_current_page_data();
 	if (!page_data.m_controller)
 		return;
-	if (wxMessageBox(_("Clear all bindings of this controller? The devices stay."), _("Clear all bindings"), wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION, this) != wxYES)
+	if (wxMessageBox(_("Clear all bindings of this controller? The device stays selected."), _("Clear all bindings"), wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION, this) != wxYES)
 		return;
 	page_data.m_controller->clear_mappings();
 	update_state();
@@ -777,8 +964,8 @@ void InputSettings2::on_load_preset(wxCommandEvent& event)
 	if (choice < 1 || choice > (int)presets.size())
 		return;
 	const auto& preset = presets[choice - 1];
-	if (!page_data.m_controller->get_controllers().empty() &&
-		wxMessageBox(wxString::Format(_("Load the preset \"%s\"?\n\n%s\n\nIt replaces this controller's devices and bindings."), wxString::FromUTF8(preset.name), wxString::FromUTF8(preset.description)),
+	if ((page_data.m_controller->get_device() || !page_data.m_controller->get_mapping_ids().empty()) &&
+		wxMessageBox(wxString::Format(_("Load the preset \"%s\"?\n\n%s\n\nIt replaces this controller's device and bindings."), wxString::FromUTF8(preset.name), wxString::FromUTF8(preset.description)),
 			_("Load preset"), wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION, this) != wxYES)
 		return;
 	const auto result = InputPresets::Apply(*page_data.m_controller, preset.id);
@@ -792,24 +979,16 @@ void InputSettings2::update_settings_mouse()
 	UpdateSettingsMouse(IsActive());
 }
 
-void InputSettings2::device_defaults(const std::shared_ptr<ControllerBase>& controller)
+void InputSettings2::device_defaults()
 {
 	auto& page_data = get_current_page_data();
-	if (!page_data.m_controller)
-		return;
-	page_data.m_controller->set_default_mapping(controller, true);
-	set_status(wxString::Format(_("%s: default bindings restored."), wxString::FromUTF8(controller->display_name())));
-	update_state();
-}
-
-void InputSettings2::device_remove(const std::shared_ptr<ControllerBase>& controller)
-{
-	auto& page_data = get_current_page_data();
-	if (!page_data.m_controller)
+	const auto device = page_data.m_controller ? page_data.m_controller->get_device() : nullptr;
+	if (!device)
 		return;
 	m_detector->cancel();
-	page_data.m_controller->remove_controller(controller);
-	set_status(wxString::Format(_("Removed %s and its bindings."), wxString::FromUTF8(controller->display_name())));
+	const bool loaded = page_data.m_controller->load_default_bindings();
+	set_status(loaded ? wxString::Format(_("%s: default bindings loaded."), wxString::FromUTF8(device->display_name()))
+		: wxString::Format(_("%s has no default bindings for this controller type: the bindings were cleared."), wxString::FromUTF8(device->display_name())));
 	update_state();
 }
 
@@ -831,7 +1010,6 @@ void InputSettings2::device_settings(const std::shared_ptr<ControllerBase>& cont
 		break;
 	}
 	case InputAPI::Keyboard:
-	case InputAPI::Mouse:
 		break;
 #ifdef SUPPORTS_WIIMOTE
 	case InputAPI::Wiimote:

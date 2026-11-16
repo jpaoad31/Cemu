@@ -72,18 +72,27 @@ public:
 	glm::vec2 get_prev_position() const;
 	PositionVisibility GetPositionVisibility() const;
 
-	void add_controller(std::shared_ptr<ControllerBase> controller);
-	void remove_controller(const std::shared_ptr<ControllerBase>& controller);
-	void clear_controllers();
-	const std::vector<std::shared_ptr<ControllerBase>>& get_controllers() const { return m_controllers; }
+	// One device per emulated controller (Dolphin's default device, see INPUT_REWORK.md): plain
+	// bindings are its inputs, Detect listens to it, and its own data (motion, touch, the Wii
+	// Remote's IR, a real board's sensors, rumble, battery) is this controller's. nullptr: none.
+	std::shared_ptr<ControllerBase> get_device() const;
+	// selects a device; the bindings stay as they are written (`X` now means the new device's X)
+	void set_device(std::shared_ptr<ControllerBase> device);
+	// devices that bindings name explicitly (`API/uuid:Input`, advanced): attached on demand so
+	// those inputs evaluate, dropped when no binding names them any more
+	std::vector<std::shared_ptr<ControllerBase>> get_extra_devices() const;
+	// the device and the extra devices (to update their state)
+	std::vector<std::shared_ptr<ControllerBase>> get_controllers() const;
 
 	// Bindings (see InputExpression.h and INPUT_REWORK.md): every emulated control maps to an
-	// expression over the attached devices' inputs, usually a list of inputs OR'ed together.
+	// expression, usually a list of the device's inputs OR'ed together.
 	bool is_mapping_down(uint64 mapping) const;
 	float get_mapping_value(uint64 mapping) const; // 0..1 (axis directions: the deflection)
 	bool has_mapping(uint64 mapping) const;
-	// short text for the UI ("X | Button 1 [Remote GamePad]")
+	// short text for the UI ("X | A [Remote GamePad]": inputs of another device are tagged)
 	std::string get_mapping_name(uint64 mapping) const;
+	// the binding names another device explicitly (advanced)
+	bool is_mapping_explicit(uint64 mapping) const;
 	// canonical expression text, as saved in the profile
 	std::string get_mapping_expression(uint64 mapping) const;
 	// replaces the binding with an expression; returns the parse error, if any (then nothing changes,
@@ -91,8 +100,6 @@ public:
 	std::optional<std::string> set_mapping_expression(uint64 mapping, std::string_view text, bool keep_invalid = false);
 	// warnings for a binding: inputs of devices that aren't attached, unknown input names
 	std::vector<std::string> get_mapping_warnings(uint64 mapping) const;
-	// the first attached device the binding uses
-	std::shared_ptr<ControllerBase> get_mapping_controller(uint64 mapping) const;
 	// the binding's input on this device (the first one), for the old profile format
 	std::optional<uint64> get_mapping_button(uint64 mapping, const ControllerBase& controller) const;
 	std::vector<uint64> get_mapping_ids() const;
@@ -100,14 +107,11 @@ public:
 	std::vector<std::pair<uint64, uint64>> get_device_inputs(const ControllerBase& controller) const;
 	void delete_mapping(uint64 mapping);
 	void clear_mappings();
-	// this device's input for the control: replaces what this device had there, keeps other devices'
-	void set_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller_base, uint64 button);
-	// adds an input to the control's list (nothing if it's there already)
+	// adds an input to the control's list (nothing if it's there already). An input of another
+	// device than the selected one is written with its device (explicit) and attaches it.
 	void add_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller_base, uint64 button);
 	// the control maps to this one input only
 	void replace_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller_base, uint64 button);
-	// removes a device's inputs from every binding that is a list
-	void remove_device_mappings(const std::shared_ptr<ControllerBase>& controller_base);
 
 	// an expression over this controller's devices, for the UI's expression editor
 	InputExpr::Expression parse_expression(std::string_view text) const;
@@ -134,16 +138,19 @@ public:
 
 	// Default bindings of a device: (emulated control, device input) pairs
 	virtual std::vector<std::pair<uint64, uint64>> get_default_mapping(const std::shared_ptr<ControllerBase>& controller) const { return {}; }
-	// Adds a device's default bindings: to the controls where the device has no input yet (other
-	// devices' inputs are kept, never replaced); replace = true first removes the device's inputs
-	// from every control ("Default" for one device). Returns true if anything changed.
-	bool set_default_mapping(const std::shared_ptr<ControllerBase>& controller, bool replace = false);
+	// Replaces every binding with the selected device's defaults (the Keyboard/Mouse device: the
+	// keyboard layout of InputPresets::KeyboardTable and the mouse's touch/tilt/pointer/balance).
+	// Returns false when the device has none (the bindings are cleared then).
+	bool load_default_bindings();
 
 protected:
 	size_t m_player_index;
 	std::string m_profile_name = "default";
 
 	mutable std::shared_mutex m_mutex;
+	std::shared_ptr<ControllerBase> m_device;
+	std::vector<std::shared_ptr<ControllerBase>> m_extra_devices;
+	// m_device (if any) first, then m_extra_devices: the expressions' device indices. Guarded by m_mutex.
 	std::vector<std::shared_ptr<ControllerBase>> m_controllers;
 
 	float get_axis_value(uint64 mapping) const;
@@ -153,6 +160,9 @@ protected:
 	// (the leaves refer to devices by index).
 	std::unordered_map<uint64, InputExpr::Expression> m_mappings;
 	void reparse_mappings_locked();
+	// attaches the devices bindings name explicitly, drops extra devices nothing names, re-parses
+	void sync_devices_locked();
+	std::shared_ptr<ControllerBase> device_locked() const { return m_device; }
 
 	bool m_homebutton_down = false;
 };

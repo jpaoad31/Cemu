@@ -61,9 +61,6 @@ std::vector<std::pair<uint64, uint64>> WiimoteController::get_default_mapping(co
 		};
 		break;
 	}
-	case InputAPI::Mouse:
-		mapping = MouseBindings::MouseDefaults(MouseBindings::kTypeWiimote);
-		break;
 	default:
 		break;
 	}
