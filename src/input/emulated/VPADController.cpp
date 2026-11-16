@@ -512,7 +512,7 @@ glm::vec2 VPADController::get_trigger() const
 	return {left, right};
 }
 
-bool VPADController::set_default_mapping(const std::shared_ptr<ControllerBase>& controller)
+std::vector<std::pair<uint64, uint64>> VPADController::get_default_mapping(const std::shared_ptr<ControllerBase>& controller) const
 {
 	std::vector<std::pair<uint64, uint64>> mapping;
 	switch (controller->api())
@@ -706,20 +706,7 @@ bool VPADController::set_default_mapping(const std::shared_ptr<ControllerBase>& 
 	}
 	}
 
-	// A Remote GamePad is the whole GamePad: its mapping replaces what other controllers (e.g. the
-	// keyboard) had on the same GamePad buttons. Other controllers only fill unmapped buttons.
-	const bool takeover = controller->api() == InputAPI::RemoteGamePad;
-	bool mapping_updated = false;
-	std::for_each(mapping.cbegin(), mapping.cend(), [this, &controller, &mapping_updated, takeover](const auto& m)
-		{
-			if (m_mappings.find(m.first) == m_mappings.cend() || takeover)
-			{
-				set_mapping(m.first, controller, m.second);
-				mapping_updated = true;
-			}
-		});
-
-	return mapping_updated;
+	return mapping;
 }
 
 void VPADController::load(const pugi::xml_node& node)

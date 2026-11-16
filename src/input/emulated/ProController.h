@@ -70,5 +70,5 @@ public:
 	bool is_b_down() const override { return is_mapping_down(kButtonId_B); }
 	bool is_home_down() const override { return is_mapping_down(kButtonId_Home); }
 
-	bool set_default_mapping(const std::shared_ptr<ControllerBase>& controller) override;
+	std::vector<std::pair<uint64, uint64>> get_default_mapping(const std::shared_ptr<ControllerBase>& controller) const override;
 };

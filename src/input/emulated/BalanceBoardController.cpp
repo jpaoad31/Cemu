@@ -18,7 +18,7 @@ uint32 BalanceBoardController::get_emulated_button_flag(uint32 id) const
 	return id == kButtonId_Power ? kWPADButton_A : 0;
 }
 
-bool BalanceBoardController::set_default_mapping(const std::shared_ptr<ControllerBase>& controller)
+std::vector<std::pair<uint64, uint64>> BalanceBoardController::get_default_mapping(const std::shared_ptr<ControllerBase>& controller) const
 {
 	std::vector<std::pair<uint64, uint64>> mapping;
 	switch (controller->api())
@@ -78,16 +78,7 @@ bool BalanceBoardController::set_default_mapping(const std::shared_ptr<Controlle
 		break;
 	}
 
-	bool mapping_updated = false;
-	for (const auto& m : mapping)
-	{
-		if (m_mappings.find(m.first) == m_mappings.cend())
-		{
-			set_mapping(m.first, controller, m.second);
-			mapping_updated = true;
-		}
-	}
-	return mapping_updated;
+	return mapping;
 }
 
 bool BalanceBoardController::is_balance_mapped() const

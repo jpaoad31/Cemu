@@ -1,0 +1,33 @@
+#pragma once
+
+// Bindings in the controller profile XML (fork addition, see INPUT_REWORK.md).
+//
+// New format: one expression per emulated control, after the <controller> (device) nodes:
+//   <bindings>
+//     <binding id="1">`Keyboard/keyboard:X` | `RemoteGamePad/26770:Button 1`</binding>
+//   </bindings>
+// Old format (still read when <bindings> is missing, and still written so older Cemu builds load
+// the profile): each <controller> node has <mappings><entry><mapping>N</mapping><button>B</button>.
+//
+// pugixml only, so the tests can use it without Cemu.
+
+#include <cstdint>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace pugi
+{
+	class xml_node;
+}
+
+namespace InputProfile
+{
+	bool HasBindings(const pugi::xml_node& root);
+	std::map<uint64_t, std::string> ReadBindings(const pugi::xml_node& root);
+	void WriteBindings(pugi::xml_node& root, const std::map<uint64_t, std::string>& bindings);
+
+	std::vector<std::pair<uint64_t, uint64_t>> ReadLegacyMappings(const pugi::xml_node& controller_node);
+	void WriteLegacyMappings(pugi::xml_node& controller_node, const std::vector<std::pair<uint64_t, uint64_t>>& mappings);
+}

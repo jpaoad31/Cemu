@@ -2,6 +2,7 @@
 #include "config/ActiveSettings.h"
 #include "input/ControllerFactory.h"
 #include "input/emulated/BalanceBoardController.h"
+#include "input/emulated/InputProfileBindings.h"
 #include <boost/property_tree/ini_parser.hpp>
 #include <pugixml.hpp>
 #include "Cafe/GameProfile/GameProfile.h"
@@ -119,6 +120,10 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 		// custom settings
 		emulated_controller->load(root);
 
+		// bindings: <bindings> (this fork's format, one expression per emulated control) when present,
+		// else the old per-device <mappings> lists, each entry becoming a one-input binding
+		const bool has_bindings = InputProfile::HasBindings(root);
+
 		for (const auto controller_node : root.select_nodes("controller"))
 		{
 			const auto cnode = controller_node.node();
@@ -177,31 +182,26 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 				controller->load(cnode);
 				
 
-				// mappings
-				if (const auto mappings_node = cnode.child("mappings"))
+				// old format mappings (also written for older Cemu builds, ignored when <bindings> exists)
+				if (!has_bindings)
 				{
-					for (const auto& entry : mappings_node.select_nodes("entry"))
-					{
-						const auto enode = entry.node();
-
-						const auto mapping_node = enode.child("mapping");
-						if (!mapping_node)
-							continue;
-
-						const auto button_node = enode.child("button");
-						if (!button_node)
-							continue;
-
-						const auto mapping = ConvertString<uint64>(mapping_node.child_value());
-						const auto button = ConvertString<uint64>(button_node.child_value());
-
+					for (const auto& [mapping, button] : InputProfile::ReadLegacyMappings(cnode))
 						emulated_controller->set_mapping(mapping, controller, button);
-					}
 				}
 			}
 			catch (const std::exception& ex)
 			{
 				cemuLog_log(LogType::Force, "can't load controller: {}", ex.what());
+			}
+		}
+
+		if (has_bindings)
+		{
+			emulated_controller->clear_mappings();
+			for (const auto& [mapping, text] : InputProfile::ReadBindings(root))
+			{
+				if (const auto error = emulated_controller->set_mapping_expression(mapping, text, true))
+					cemuLog_log(LogType::Force, "controller profile {}: binding {} doesn't parse ({}): {}", _pathToUtf8(file_path), mapping, *error, text);
 			}
 		}
 
@@ -529,20 +529,23 @@ bool InputManager::save(size_t player_index, std::string_view filename)
 		// custom settings
 		controller->save(controller_node);
 
-		// mappings for current controller
-		auto mappings_node = controller_node.append_child("mappings");
-		for (const auto& mapping : emulated_controller->m_mappings)
+		// mappings for current controller, in the old format (one input per control and device), so
+		// Cemu builds without the bindings rework still load the profile
+		std::vector<std::pair<uint64_t, uint64_t>> legacy;
+		for (const auto mapping : emulated_controller->get_mapping_ids())
 		{
-			if (!mapping.second.controller.expired() && *controller == *mapping.second.controller.lock())
-			{
-				auto entry_node = mappings_node.append_child("entry");
-				entry_node.append_child("mapping").append_child(pugi::node_pcdata).set_value(
-					fmt::format("{}", mapping.first).c_str());
-				entry_node.append_child("button").append_child(pugi::node_pcdata).set_value(
-					fmt::format("{}", mapping.second.button).c_str());
-			}
+			if (const auto button = emulated_controller->get_mapping_button(mapping, *controller))
+				legacy.emplace_back(mapping, *button);
 		}
+		InputProfile::WriteLegacyMappings(controller_node, legacy);
 	}
+
+	// the bindings: one expression per emulated control (see INPUT_REWORK.md)
+	std::map<uint64_t, std::string> bindings;
+	for (const auto mapping : emulated_controller->get_mapping_ids())
+		bindings[mapping] = emulated_controller->get_mapping_expression(mapping);
+	InputProfile::WriteBindings(emulated_controller_node, bindings);
+
 	FileStream* fs = FileStream::createFile2(file_path);
 	if (!fs)
 		return false;

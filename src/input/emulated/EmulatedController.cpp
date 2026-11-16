@@ -230,6 +230,57 @@ PositionVisibility EmulatedController::GetPositionVisibility() const
 	return PositionVisibility::NONE;
 }
 
+namespace
+{
+	// the emulated controller's device list as seen by the binding expressions
+	class ControllerDevices : public InputExpr::DeviceSet, public InputExpr::InputSource
+	{
+	public:
+		explicit ControllerDevices(const std::vector<std::shared_ptr<ControllerBase>>& controllers) : m_controllers(controllers) {}
+
+		size_t device_count() const override { return m_controllers.size(); }
+		std::string device_api(size_t dev) const override { return std::string{InputAPI::to_string(m_controllers[dev]->api())}; }
+		std::string device_uuid(size_t dev) const override { return m_controllers[dev]->uuid(); }
+		std::string device_display_name(size_t dev) const override { return m_controllers[dev]->display_name(); }
+		std::string input_name(size_t dev, InputExpr::InputId id) const override { return m_controllers[dev]->get_button_name(id); }
+
+		std::optional<InputExpr::InputId> find_input(size_t dev, std::string_view name) const override
+		{
+			// input ids are small for every API except GTK key values (those are saved as #id)
+			constexpr uint64 kScanLimit = 0x200;
+			for (uint64 id = 0; id < kScanLimit; ++id)
+			{
+				if (boost::iequals(m_controllers[dev]->get_button_name(id), name))
+					return id;
+			}
+			return std::nullopt;
+		}
+
+		float value(size_t dev, InputExpr::InputId id) const override { return m_controllers[dev]->get_axis_value(id); }
+		bool active(size_t dev, InputExpr::InputId id) const override { return m_controllers[dev]->get_state().buttons.GetButtonState((uint32)id); }
+
+		size_t index_of(const ControllerBase& controller) const
+		{
+			for (size_t i = 0; i < m_controllers.size(); ++i)
+			{
+				if (*m_controllers[i] == controller)
+					return i;
+			}
+			return InputExpr::kNoDevice;
+		}
+
+	private:
+		const std::vector<std::shared_ptr<ControllerBase>>& m_controllers;
+	};
+}
+
+void EmulatedController::reparse_mappings_locked()
+{
+	const ControllerDevices devices(m_controllers);
+	for (auto& [id, expr] : m_mappings)
+		expr = InputExpr::Expression::parse(expr.text(), devices);
+}
+
 void EmulatedController::add_controller(std::shared_ptr<ControllerBase> controller)
 {
 	controller->connect();
@@ -241,29 +292,31 @@ void EmulatedController::add_controller(std::shared_ptr<ControllerBase> controll
     #endif
 	std::scoped_lock lock(m_mutex);
 	m_controllers.emplace_back(std::move(controller));
+	// bindings that named this device before it was attached now resolve
+	reparse_mappings_locked();
 }
 
 void EmulatedController::remove_controller(const std::shared_ptr<ControllerBase>& controller)
 {
 	std::scoped_lock lock(m_mutex);
-	const auto it = std::find(m_controllers.cbegin(), m_controllers.cend(), controller);
+	const auto it = std::find_if(m_controllers.cbegin(), m_controllers.cend(), [&](const auto& c) { return *c == *controller; });
 	if (it != m_controllers.cend())
 	{
-		m_controllers.erase(it);
-
-		for(auto m = m_mappings.begin(); m != m_mappings.end();)
+		// drop the device's inputs from the binding lists (expressions keep them, unresolved)
 		{
-			if(auto mc = m->second.controller.lock())
+			const ControllerDevices devices(m_controllers);
+			const size_t index = it - m_controllers.cbegin();
+			for (auto m = m_mappings.begin(); m != m_mappings.end();)
 			{
-				if(*mc == *controller)
-				{
+				m->second = InputExpr::Expression::remove_device(m->second, index, devices);
+				if (m->second.empty())
 					m = m_mappings.erase(m);
-					continue;
-				}
+				else
+					++m;
 			}
-
-			++m;
 		}
+		m_controllers.erase(it);
+		reparse_mappings_locked();
 	}
 }
 
@@ -271,61 +324,121 @@ void EmulatedController::clear_controllers()
 {
 	std::scoped_lock lock(m_mutex);
 	m_controllers.clear();
+	reparse_mappings_locked();
 }
 
 float EmulatedController::get_axis_value(uint64 mapping) const
 {
+	return std::max(0.0f, get_mapping_value(mapping));
+}
+
+float EmulatedController::get_mapping_value(uint64 mapping) const
+{
 	std::shared_lock lock(m_mutex);
 	const auto it = m_mappings.find(mapping);
-	if (it != m_mappings.cend())
-	{
-		if (const auto controller = it->second.controller.lock()) {
-			return controller->get_axis_value(it->second.button);
-		}
-	}
-
-	return 0;
+	if (it == m_mappings.cend())
+		return 0;
+	return it->second.value(ControllerDevices(m_controllers));
 }
 
 bool EmulatedController::is_mapping_down(uint64 mapping) const
 {
 	std::shared_lock lock(m_mutex);
 	const auto it = m_mappings.find(mapping);
-	if (it != m_mappings.cend())
-	{
-		if (const auto controller = it->second.controller.lock())
-			return controller->get_state().buttons.GetButtonState(it->second.button);
-	}
-	return false;
+	if (it == m_mappings.cend())
+		return false;
+	return it->second.active(ControllerDevices(m_controllers));
 }
 
+bool EmulatedController::has_mapping(uint64 mapping) const
+{
+	std::shared_lock lock(m_mutex);
+	const auto it = m_mappings.find(mapping);
+	return it != m_mappings.cend() && !it->second.empty();
+}
 
 std::string EmulatedController::get_mapping_name(uint64 mapping) const
 {
 	std::shared_lock lock(m_mutex);
 	const auto it = m_mappings.find(mapping);
-	if (it != m_mappings.cend())
-	{
-		if (const auto controller = it->second.controller.lock()) {
-			return controller->get_button_name(it->second.button);
-		}
-	}
+	if (it == m_mappings.cend())
+		return {};
+	return it->second.display(ControllerDevices(m_controllers), m_controllers.size() > 1);
+}
 
-	return {};
+std::string EmulatedController::get_mapping_expression(uint64 mapping) const
+{
+	std::shared_lock lock(m_mutex);
+	const auto it = m_mappings.find(mapping);
+	return it == m_mappings.cend() ? std::string{} : it->second.text();
+}
+
+std::optional<std::string> EmulatedController::set_mapping_expression(uint64 mapping, std::string_view text, bool keep_invalid)
+{
+	std::scoped_lock lock(m_mutex);
+	auto expr = InputExpr::Expression::parse(text, ControllerDevices(m_controllers));
+	if (!expr.ok())
+	{
+		auto error = expr.error();
+		if (keep_invalid)
+			m_mappings[mapping] = std::move(expr);
+		return error;
+	}
+	if (expr.empty())
+		m_mappings.erase(mapping);
+	else
+		m_mappings[mapping] = std::move(expr);
+	return std::nullopt;
+}
+
+std::vector<std::string> EmulatedController::get_mapping_warnings(uint64 mapping) const
+{
+	std::shared_lock lock(m_mutex);
+	const auto it = m_mappings.find(mapping);
+	if (it == m_mappings.cend())
+		return {};
+	if (!it->second.ok())
+		return {it->second.error()};
+	return it->second.warnings();
 }
 
 std::shared_ptr<ControllerBase> EmulatedController::get_mapping_controller(uint64 mapping) const
 {
 	std::shared_lock lock(m_mutex);
 	const auto it = m_mappings.find(mapping);
-	if (it != m_mappings.cend())
+	if (it == m_mappings.cend())
+		return {};
+	for (const auto& leaf : it->second.leaves())
 	{
-		if (const auto controller = it->second.controller.lock()) {
-			return controller;
-		}
+		if (leaf.device < m_controllers.size())
+			return m_controllers[leaf.device];
 	}
-
 	return {};
+}
+
+std::optional<uint64> EmulatedController::get_mapping_button(uint64 mapping, const ControllerBase& controller) const
+{
+	std::shared_lock lock(m_mutex);
+	const auto it = m_mappings.find(mapping);
+	if (it == m_mappings.cend())
+		return std::nullopt;
+	const size_t index = ControllerDevices(m_controllers).index_of(controller);
+	for (const auto& leaf : it->second.leaves())
+	{
+		if (leaf.device == index && leaf.input)
+			return *leaf.input;
+	}
+	return std::nullopt;
+}
+
+std::vector<uint64> EmulatedController::get_mapping_ids() const
+{
+	std::shared_lock lock(m_mutex);
+	std::vector<uint64> result;
+	for (const auto& m : m_mappings)
+		result.emplace_back(m.first);
+	std::sort(result.begin(), result.end());
+	return result;
 }
 
 void EmulatedController::delete_mapping(uint64 mapping)
@@ -344,7 +457,106 @@ void EmulatedController::set_mapping(uint64 mapping, const std::shared_ptr<Contr
                                      uint64 button)
 {
 	std::scoped_lock lock(m_mutex);
-	m_mappings[mapping] = { controller, button };
+	const ControllerDevices devices(m_controllers);
+	const size_t index = devices.index_of(*controller);
+	if (index == InputExpr::kNoDevice)
+		return;
+	auto& expr = m_mappings[mapping];
+	expr = InputExpr::Expression::append(InputExpr::Expression::remove_device(expr, index, devices), index, button, devices);
+}
+
+void EmulatedController::add_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller, uint64 button)
+{
+	std::scoped_lock lock(m_mutex);
+	const ControllerDevices devices(m_controllers);
+	const size_t index = devices.index_of(*controller);
+	if (index == InputExpr::kNoDevice)
+		return;
+	auto& expr = m_mappings[mapping];
+	expr = InputExpr::Expression::append(expr, index, button, devices);
+}
+
+void EmulatedController::replace_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller, uint64 button)
+{
+	std::scoped_lock lock(m_mutex);
+	const ControllerDevices devices(m_controllers);
+	const size_t index = devices.index_of(*controller);
+	if (index == InputExpr::kNoDevice)
+		return;
+	m_mappings[mapping] = InputExpr::Expression::from_input(index, button, devices);
+}
+
+void EmulatedController::remove_device_mappings(const std::shared_ptr<ControllerBase>& controller)
+{
+	std::scoped_lock lock(m_mutex);
+	const ControllerDevices devices(m_controllers);
+	const size_t index = devices.index_of(*controller);
+	if (index == InputExpr::kNoDevice)
+		return;
+	for (auto m = m_mappings.begin(); m != m_mappings.end();)
+	{
+		m->second = InputExpr::Expression::remove_device(m->second, index, devices);
+		if (m->second.empty())
+			m = m_mappings.erase(m);
+		else
+			++m;
+	}
+}
+
+InputExpr::Expression EmulatedController::parse_expression(std::string_view text) const
+{
+	std::shared_lock lock(m_mutex);
+	return InputExpr::Expression::parse(text, ControllerDevices(m_controllers));
+}
+
+std::pair<float, bool> EmulatedController::evaluate_expression(const InputExpr::Expression& expression) const
+{
+	std::shared_lock lock(m_mutex);
+	const ControllerDevices devices(m_controllers);
+	return {expression.value(devices), expression.active(devices)};
+}
+
+bool EmulatedController::set_default_mapping(const std::shared_ptr<ControllerBase>& controller, bool replace)
+{
+	const auto defaults = get_default_mapping(controller);
+	std::scoped_lock lock(m_mutex);
+	const ControllerDevices devices(m_controllers);
+	const size_t index = devices.index_of(*controller);
+	if (index == InputExpr::kNoDevice)
+		return false;
+
+	bool changed = false;
+	if (replace)
+	{
+		for (auto m = m_mappings.begin(); m != m_mappings.end();)
+		{
+			auto updated = InputExpr::Expression::remove_device(m->second, index, devices);
+			changed |= updated.text() != m->second.text();
+			m->second = std::move(updated);
+			if (m->second.empty())
+				m = m_mappings.erase(m);
+			else
+				++m;
+		}
+	}
+
+	for (const auto& [mapping, button] : defaults)
+	{
+		auto& expr = m_mappings[mapping];
+		// never steal: a device only adds to the controls where it has nothing yet
+		if (expr.references_device(index))
+			continue;
+		expr = InputExpr::Expression::append(expr, index, button, devices);
+		changed = true;
+	}
+	for (auto m = m_mappings.begin(); m != m_mappings.end();)
+	{
+		if (m->second.empty())
+			m = m_mappings.erase(m);
+		else
+			++m;
+	}
+	return changed;
 }
 
 bool EmulatedController::operator==(const EmulatedController& o) const

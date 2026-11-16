@@ -132,7 +132,7 @@ glm::vec2 ProController::get_trigger() const
 	return { left, right };
 }
 
-bool ProController::set_default_mapping(const std::shared_ptr<ControllerBase>& controller)
+std::vector<std::pair<uint64, uint64>> ProController::get_default_mapping(const std::shared_ptr<ControllerBase>& controller) const
 {
 	std::vector<std::pair<uint64, uint64>> mapping;
 	switch (controller->api())
@@ -262,15 +262,5 @@ bool ProController::set_default_mapping(const std::shared_ptr<ControllerBase>& c
 	}
 	}
 
-	bool mapping_updated = false;
-	std::for_each(mapping.cbegin(), mapping.cend(), [this, &controller, &mapping_updated](const auto& m)
-		{
-			if (m_mappings.find(m.first) == m_mappings.cend())
-			{
-				set_mapping(m.first, controller, m.second);
-				mapping_updated = true;
-			}
-		});
-
-	return mapping_updated;
+	return mapping;
 }

@@ -33,6 +33,10 @@ add_library(CemuInput
 	emulated/ProController.cpp
 	emulated/EmulatedController.h
 	emulated/EmulatedController.cpp
+	emulated/InputExpression.cpp
+	emulated/InputExpression.h
+	emulated/InputProfileBindings.cpp
+	emulated/InputProfileBindings.h
 	emulated/ProController.h
 	emulated/WPADController.cpp
 	emulated/WPADController.h

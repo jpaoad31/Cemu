@@ -24,7 +24,7 @@ uint32 WiimoteController::get_emulated_button_flag(uint32 id) const
 	return s_get_emulated_button_flag(id);
 }
 
-bool WiimoteController::set_default_mapping(const std::shared_ptr<ControllerBase>& controller)
+std::vector<std::pair<uint64, uint64>> WiimoteController::get_default_mapping(const std::shared_ptr<ControllerBase>& controller) const
 {
 	std::vector<std::pair<uint64, uint64>> mapping;
 	switch (controller->api())
@@ -59,17 +59,7 @@ bool WiimoteController::set_default_mapping(const std::shared_ptr<ControllerBase
 	}
 	}
 
-	bool mapping_updated = false;
-	std::for_each(mapping.cbegin(), mapping.cend(), [this, &controller, &mapping_updated](const auto& m)
-		{
-			if (m_mappings.find(m.first) == m_mappings.cend())
-			{
-				set_mapping(m.first, controller, m.second);
-				mapping_updated = true;
-			}
-		});
-
-	return mapping_updated;
+	return mapping;
 }
 
 glm::vec2 WiimoteController::get_axis() const

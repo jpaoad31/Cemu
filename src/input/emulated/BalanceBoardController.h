@@ -69,7 +69,7 @@ public:
 	size_t get_highest_mapping_id() const override { return kButtonId_Max; }
 	bool is_axis_mapping(uint64 mapping) const override { return mapping >= kButtonId_Balance_Up && mapping <= kButtonId_Balance_Right; }
 
-	bool set_default_mapping(const std::shared_ptr<ControllerBase>& controller) override;
+	std::vector<std::pair<uint64, uint64>> get_default_mapping(const std::shared_ptr<ControllerBase>& controller) const override;
 
 	// centre of balance from the Balance stick (x: right, y: front), or from the mouse when the
 	// stick is unmapped

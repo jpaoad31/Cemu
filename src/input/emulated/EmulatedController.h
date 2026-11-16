@@ -7,6 +7,7 @@ class ControllerBase;
 
 #include "input/api/ControllerState.h"
 #include "input/api/InputAPI.h"
+#include "input/emulated/InputExpression.h"
 
 #include "util/helpers/helpers.h"
 
@@ -76,12 +77,39 @@ public:
 	void clear_controllers();
 	const std::vector<std::shared_ptr<ControllerBase>>& get_controllers() const { return m_controllers; }
 
+	// Bindings (see InputExpression.h and INPUT_REWORK.md): every emulated control maps to an
+	// expression over the attached devices' inputs, usually a list of inputs OR'ed together.
 	bool is_mapping_down(uint64 mapping) const;
+	float get_mapping_value(uint64 mapping) const; // 0..1 (axis directions: the deflection)
+	bool has_mapping(uint64 mapping) const;
+	// short text for the UI ("X | Button 1 [Remote GamePad]")
 	std::string get_mapping_name(uint64 mapping) const;
+	// canonical expression text, as saved in the profile
+	std::string get_mapping_expression(uint64 mapping) const;
+	// replaces the binding with an expression; returns the parse error, if any (then nothing changes,
+	// unless keep_invalid: profile loading keeps the text so it isn't lost, the binding stays inactive)
+	std::optional<std::string> set_mapping_expression(uint64 mapping, std::string_view text, bool keep_invalid = false);
+	// warnings for a binding: inputs of devices that aren't attached, unknown input names
+	std::vector<std::string> get_mapping_warnings(uint64 mapping) const;
+	// the first attached device the binding uses
 	std::shared_ptr<ControllerBase> get_mapping_controller(uint64 mapping) const;
+	// the binding's input on this device (the first one), for the old profile format
+	std::optional<uint64> get_mapping_button(uint64 mapping, const ControllerBase& controller) const;
+	std::vector<uint64> get_mapping_ids() const;
 	void delete_mapping(uint64 mapping);
 	void clear_mappings();
+	// this device's input for the control: replaces what this device had there, keeps other devices'
 	void set_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller_base, uint64 button);
+	// adds an input to the control's list (nothing if it's there already)
+	void add_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller_base, uint64 button);
+	// the control maps to this one input only
+	void replace_mapping(uint64 mapping, const std::shared_ptr<ControllerBase>& controller_base, uint64 button);
+	// removes a device's inputs from every binding that is a list
+	void remove_device_mappings(const std::shared_ptr<ControllerBase>& controller_base);
+
+	// an expression over this controller's devices, for the UI's expression editor
+	InputExpr::Expression parse_expression(std::string_view text) const;
+	std::pair<float, bool> evaluate_expression(const InputExpr::Expression& expression) const;
 
 	virtual uint32 get_emulated_button_flag(uint32 mapping) const = 0;
 
@@ -102,7 +130,12 @@ public:
 
 	bool was_home_button_down() { return std::exchange(m_homebutton_down, false); }
 
-	virtual bool set_default_mapping(const std::shared_ptr<ControllerBase>& controller) { return false; }
+	// Default bindings of a device: (emulated control, device input) pairs
+	virtual std::vector<std::pair<uint64, uint64>> get_default_mapping(const std::shared_ptr<ControllerBase>& controller) const { return {}; }
+	// Adds a device's default bindings: to the controls where the device has no input yet (other
+	// devices' inputs are kept, never replaced); replace = true first removes the device's inputs
+	// from every control ("Default" for one device). Returns true if anything changed.
+	bool set_default_mapping(const std::shared_ptr<ControllerBase>& controller, bool replace = false);
 
 protected:
 	size_t m_player_index;
@@ -114,12 +147,10 @@ protected:
 	float get_axis_value(uint64 mapping) const;
 	bool m_rumble = false;
 
-	struct Mapping
-	{
-		std::weak_ptr<ControllerBase> controller;
-		uint64 button;
-	};
-	std::unordered_map<uint64, Mapping> m_mappings;
+	// emulated control -> binding. Guarded by m_mutex. Re-parsed whenever the device list changes
+	// (the leaves refer to devices by index).
+	std::unordered_map<uint64, InputExpr::Expression> m_mappings;
+	void reparse_mappings_locked();
 
 	bool m_homebutton_down = false;
 };
