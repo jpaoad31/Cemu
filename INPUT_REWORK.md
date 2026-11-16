@@ -2,7 +2,120 @@
 
 Modelled on Dolphin's input system (design only: Cemu is MPL-2.0, Dolphin GPL; all code here is our own).
 
-## What changed for users
+## One device per controller (branch `input-single`, current model)
+
+The user's decision: Dolphin's model. The device lists below ("Several devices per button", the per-device
+rows) are **replaced** by this section; the expression engine, binding fields, Detect, the Advanced editor
+and the mouse groups stay.
+
+- **One selected device per emulated controller** (Dolphin's default device): a dropdown at the top of each
+  controller tab ("None", Keyboard/Mouse, the Remote GamePad, the connected SDL/DSU pads and Wii devices,
+  listed by a background thread; **Refresh**; **Other device...** for a DSU host or another Remote GamePad
+  port), its state below it (connected / not found / waiting for the phone; red when not connected, "(not
+  found)" in the list), then **Default bindings**, **Settings...**, **Calibrate**, **Clear all bindings**,
+  **Load preset...**.
+- **Keyboard/Mouse is one device** (API `Keyboard`, uuid `keyboard`, so old keyboard bindings stay valid). The
+  mouse inputs are its inputs from id `0x40000000` (`MouseInputs::KeyboardId`), named `Mouse Left`, `Mouse
+  Right`, `Middle`/`Back`/`Forward`, `Wheel Up/Down`, `Cursor X/Y`, `Cursor X+`..., `Move X+`..., with the
+  `TV `/`GamePad ` prefixes (`GamePad Mouse Left`). The separate Mouse API is gone.
+- **Plain bindings are the device's inputs**: written without a device, `` `X` | `Space` ``. Changing the
+  device keeps the texts (Dolphin): `` `X` `` then means the new device's X; inputs it doesn't have show
+  with `(?)`.
+- **Changing the device** (my choice, Dolphin-like): with no bindings, its defaults are loaded at once; else
+  a question "Load the default bindings of X?" (Yes replaces all bindings with X's defaults, default
+  button when the API changes; No keeps them as text). **Default bindings** = replace all bindings with the
+  device's defaults; for Keyboard/Mouse that is the preset keyboard layout (`InputPresets::KeyboardTable`,
+  by key name) + the mouse's touch/tilt/pointer/balance.
+- **Explicit cross-device inputs** stay possible in **Advanced...**: `` `RemoteGamePad/26770:A` ``,
+  `` `Keyboard/keyboard:GamePad Mouse Left` ``. Such devices are attached on demand (created from the text,
+  dropped when no binding names them) so they evaluate. Fields with them are drawn in the link colour with a
+  mark at the left and the device in brackets (`GamePad Mouse Left [Keyboard/Mouse]`); a note counts them.
+  The Advanced editor lists the device (inserted plain), the devices bindings already name and
+  Keyboard/Mouse (inserted qualified); its Detect listens to all devices.
+- **Detect listens only to the device.** "**Detect on all devices**" (checkbox, Dolphin's option) also
+  listens to Keyboard/Mouse, connected SDL pads and the named devices; an input of another device is
+  written qualified (explicit) and says so in the status line.
+- **The device's own data**: motion (VPAD gyro/accel, the Nunchuk), the touch position, the Wii Remote's IR,
+  rumble, battery, the Remote GamePad options (camera/mic/audio/video, shown while it is the device) come
+  from the selected device only. With the Remote GamePad as the GamePad's device, the phone's touch and
+  motion are the GamePad's; the mouse then touches only through explicit `Keyboard/keyboard:` inputs in the
+  Touch group. Emulated tilt is used when the device gives no motion.
+- **Balance Board source follows the device**: a Wiimote-API device -> the real board (a Wii Remote, or a
+  board that isn't connected: the emulated board with the red fallback warning, as before); Keyboard/Mouse
+  or a pad -> the emulated board.
+- **Warnings**: "This device is also selected on Controller N" (an error for a Wii device / Remote GamePad,
+  a note with the shared inputs for a keyboard or pad), a Balance Board on a non-board controller, the
+  board fallback, the mouse cursor driving two controllers, bindings with `(?)`, explicit bindings.
+- **Presets are "device + bindings"**: GamePad *Keyboard/Mouse*, *Remote GamePad (iPhone)*, *SDL pad* (its
+  motion when it has a gyro; touch, and tilt without a gyro, from the mouse as explicit Keyboard/Mouse
+  inputs); Wii Remote *Keyboard/Mouse pointer*, *Real Wii Remote*; board *Emulated: Keyboard/Mouse*, *Real
+  board*; Pro/Classic *SDL gamepad*. "Keyboard + Remote GamePad" is gone.
+
+### Migration of older profiles (bindings version < 3)
+
+The user's decision: "just keep the bound device and drop the rest" (`input/emulated/SingleDeviceMigration.*`):
+- Keyboard and the old Mouse device count as one device, Keyboard/Mouse (old Mouse names are renamed:
+  `GamePad Left` -> `GamePad Mouse Left`). Profiles before version 2 first get the mouse's old implicit use as
+  bindings, as before.
+- The kept device is the **main non-keyboard device** if there is one (with several: the most inputs bound,
+  then Remote GamePad > Wii device > others, then profile order), else Keyboard/Mouse.
+- Plain bindings keep the kept device's inputs (written plainly) and **drop every other device's**.
+  Advanced expressions (anything but a list) are kept whole, other devices explicit.
+- Logged once per load (`controller profile ...: one device per controller: kept ..., dropped ...`) and shown
+  in the tab (red): "Bindings from Keyboard/Mouse (12) were removed: one device per controller." Only the kept
+  device is created (a dropped Remote GamePad doesn't start listening). The profile is written in the new
+  format when the input settings close.
+
+What the user's profiles (`controllerProfiles.20261115-232731`) become:
+
+| profile | before | after |
+|---|---|---|
+| controller0 (GamePad) | Keyboard (no inputs) + Remote GamePad (25 bindings) + the mouse's implicit touch/tilt (12) | **Remote GamePad**, its 25 bindings; the 12 mouse bindings dropped (note shown); phone touch/motion |
+| controller1 (Wii Remote) | Keyboard: Space -> 17 | **Keyboard/Mouse**, `` `Space` ``; nothing dropped |
+| controller2 (Balance Board) | Keyboard: P power, 6 step-off + implicit mouse balance | **Keyboard/Mouse**, P, 6, balance `TV Cursor`; emulated board |
+| (test) controller1 + a Wiimote | Keyboard Space + Wiimote A, B | **Wiimote 0**, `` `A` ``, `` `B` ``; Space dropped |
+| (test) controller2 + a Wiimote (the white-screen case) | Keyboard P, 6 + Wiimote A | **Wiimote 0**, Power = `` `A` ``; P, 6 dropped; red: "Using the emulated board: the real board ... is not connected" and "also selected on Controller 2" |
+
+### Profile format (version 3)
+
+```xml
+<controller><api>RemoteGamePad</api><uuid>26770</uuid>...<mappings>...</mappings></controller>
+<bindings version="3">
+  <binding id="1">`A`</binding>
+  <binding id="104">`Keyboard/keyboard:GamePad Mouse Left`</binding>
+</bindings>
+```
+
+Only the selected device is written as `<controller>` (with its old `<mappings>`, so older builds load it as a
+one-device profile); explicitly named devices are recreated from the binding text. A version 3 profile with
+several `<controller>` nodes uses the first. Older builds of this fork read version 3 bindings as errors
+(unqualified inputs) and keep them as text.
+
+### Expressions (version 3)
+
+`` `Input` `` = the selected device's input; `` `API/uuid:Input` `` / `` `API:Input` `` = a given device. A text
+before the first `:` is a device only if it looks like one (`Name` or `Name/uuid`); names with `:` are saved as
+`#id`. A qualifier naming the selected device stays as written (explicit).
+
+### Code (input-single)
+
+| | |
+|---|---|
+| `input/emulated/SingleDeviceMigration.*` | old profile -> one device (pure, tested) |
+| `input/emulated/InputExpression.*` | `DeviceSet::default_device`, `Leaf::qualified`, `remove_leaves`, `map_leaves`, `has_qualified_inputs` |
+| `input/emulated/EmulatedController.*` | `get_device`/`set_device`, extra devices (`sync_devices_locked`), `load_default_bindings`; device data from the device only |
+| `input/api/Keyboard/KeyboardController.*`, `input/api/Mouse/MouseInputs.h` | Keyboard/Mouse |
+| `input/InputManager.cpp` | load (migration, notes), save (one `<controller>`) |
+| `gui/wxgui/input/InputSettings2.*` | device dropdown, refresh thread, select/defaults question, note |
+| `gui/wxgui/input/InputDetector.*` | device-only Detect, `candidate_devices`, all-devices option |
+
+Tests: `InputExpressionTest.cpp` adds `test_default_device` (qualified/unqualified inputs, evaluation, the same
+text against another device, `#id`, list editing), `test_keyboard_mouse_names` and `test_migration` (the
+user's three profiles, the Wiimote variants, the choice of the main device, advanced expressions, unknown
+devices). Detect's device filter is `InputDetector::candidate_devices` (wx code, not in the standalone test).
+Scripted runs: copies of the user's profiles in a portable folder (see Testing), snapshots of the three tabs.
+
+## What changed for users (input-rework; the device list is superseded, see above)
 
 - **Several devices per button.** Every emulated control (a GamePad button, a stick direction, the
   board's Power button...) has a *list* of inputs, OR'ed together: `X [Keyboard] | A [Remote GamePad]`.
@@ -35,7 +148,7 @@ Modelled on Dolphin's input system (design only: Cemu is MPL-2.0, Dolphin GPL; a
 - The window **remembers its size and position**, scrolls when smaller than its content, and grows to fit a
   larger panel (within the screen).
 
-## Mouse and pointer groups (branch `input-pointer`)
+## Mouse and pointer groups (branch `input-pointer`; the Mouse device is now part of Keyboard/Mouse, see above)
 
 Nothing in the emulated controllers reads the mouse any more: the mouse is a **device** ("Mouse", always
 available, listed with the others, Remove takes all its bindings away) and the controls it used to drive
@@ -169,7 +282,8 @@ Wiimote / board / bridge internals were left alone apart from `BalanceBoardContr
     P=build/vcpkg_installed/arm64-osx
     clang++ -std=c++20 -Wall -I src -I $P/include src/input/emulated/InputExpressionTest.cpp \
       src/input/emulated/InputExpression.cpp src/input/emulated/InputProfileBindings.cpp \
-      src/input/emulated/MouseBindings.cpp $P/lib/libpugixml.a -o /tmp/exprtest && /tmp/exprtest
+      src/input/emulated/MouseBindings.cpp src/input/emulated/SingleDeviceMigration.cpp \
+      $P/lib/libpugixml.a -o /tmp/exprtest && /tmp/exprtest
 
 Scripted window check with a **portable** data folder (a `portable/` directory next to the .app; never the
 user's settings): `CEMU_TEST_INPUT_SETTINGS=SECONDS` opens Input settings at startup, closes it after SECONDS

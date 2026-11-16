@@ -233,6 +233,14 @@ device pointer when a device drops out (9ea9be7).
   explicit Mouse bindings. **Load preset...** per emulated controller (compiled in, `input/InputPresets.cpp`).
   Also fixed: the GamePad window's right button never registered as held (it read the left button), and the
   imgui overlay consumed the touch screen's click latch.
+- **One device per emulated controller** (branch `input-single`, committed, not yet tested by hand; see
+  `INPUT_REWORK.md` "One device per controller"): Dolphin's model. Each controller has one selected device
+  (dropdown with state, Refresh, Other device...); plain bindings (`` `X` ``) are its inputs, Detect listens to it
+  (optional "Detect on all devices"), its motion/touch/IR/real-board data are the controller's. Keyboard and
+  mouse are one device, "Keyboard/Mouse". Other devices only through explicit `` `API/uuid:Input` `` in the
+  Advanced editor (tagged and coloured). Old multi-device profiles keep their main non-keyboard device and drop
+  the others' bindings (logged, red note in the tab); bindings version 3. Fixes the mix-ups: a Wii Remote
+  silently on the Balance Board, the mouse tilting the GamePad while the phone sent motion.
 
 ## Upstream (Cemu's AI policy)
 
