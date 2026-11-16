@@ -2,10 +2,13 @@
 
 #include "input/api/Controller.h"
 #include "input/InputManager.h"
-#include "Cafe/HW/Latte/Core/Latte.h"
+#include "input/emulated/MouseBindings.h"
 #ifdef SUPPORTS_WIIMOTE
 #include "input/api/Wiimote/NativeWiimoteController.h"
 #endif
+
+static_assert((uint64)BalanceBoardController::kButtonId_Balance_Up == (uint64)MouseBindings::kBalanceUp && (uint64)BalanceBoardController::kButtonId_Balance_Right == (uint64)MouseBindings::kBalanceRight,
+	"MouseBindings uses BalanceBoardController's Balance ids");
 
 BalanceBoardController::BalanceBoardController(size_t player_index)
 	: WPADController(player_index, kDataFormat_BALANCE_CHECKER), m_ext_memory(BalanceBoardMath::BuildExtensionMemory())
@@ -25,8 +28,8 @@ std::vector<std::pair<uint64, uint64>> BalanceBoardController::get_default_mappi
 	{
 	case InputAPI::Keyboard:
 	{
-		// O step off, P power (as Dolphin's emulated board). The Balance stick is left unmapped:
-		// it then follows the mouse (see get_axis); map it to keys or a stick to override that
+		// O step off, P power (as Dolphin's emulated board). The balance comes from the Mouse
+		// device's defaults or a stick
 #if BOOST_OS_WINDOWS
 		constexpr uint64 kKeyO = 'O', kKeyP = 'P';
 #elif BOOST_OS_MACOS
@@ -63,6 +66,9 @@ std::vector<std::pair<uint64, uint64>> BalanceBoardController::get_default_mappi
 		};
 		break;
 #endif
+	case InputAPI::Mouse:
+		mapping = MouseBindings::MouseDefaults(MouseBindings::kTypeBoard);
+		break;
 	case InputAPI::XInput:
 		mapping =
 		{
@@ -85,35 +91,16 @@ bool BalanceBoardController::is_balance_mapped() const
 {
 	for (uint64 id = kButtonId_Balance_Up; id <= kButtonId_Balance_Right; id++)
 	{
-		if (get_mapping_controller(id))
+		if (has_mapping(id))
 			return true;
 	}
 	return false;
 }
 
-// With no Balance mapping, the centre of balance follows the mouse over the TV image in the main
-// window, measured the same way as the GamePad touch screen (VPADController::update_touch): the
-// image centre is centred, its edges are a full lean, up is front
-glm::vec2 BalanceBoardController::get_mouse_axis()
-{
-	glm::ivec2 image_pos, image_size;
-	LatteRenderTarget_getScreenImageArea(&image_pos.x, &image_pos.y, &image_size.x, &image_size.y, nullptr, nullptr, false);
-	if (image_size.x <= 0 || image_size.y <= 0)
-		return {};
-
-	glm::vec2 relative_mouse_pos = InputManager::instance().get_mouse_position(false) - image_pos;
-	relative_mouse_pos = { std::min(relative_mouse_pos.x, (float)image_size.x), std::min(relative_mouse_pos.y, (float)image_size.y) };
-	relative_mouse_pos = { std::max(relative_mouse_pos.x, 0.0f), std::max(relative_mouse_pos.y, 0.0f) };
-	relative_mouse_pos /= image_size;
-
-	return { relative_mouse_pos.x * 2.0f - 1.0f, 1.0f - relative_mouse_pos.y * 2.0f };
-}
-
+// The centre of balance from the Balance bindings (fork: the mouse no longer drives it implicitly
+// when they are unbound; old profiles get the cursor as explicit bindings, see MouseBindings.h)
 glm::vec2 BalanceBoardController::get_axis() const
 {
-	if (!is_balance_mapped())
-		return get_mouse_axis();
-
 	const auto left = get_axis_value(kButtonId_Balance_Left);
 	const auto right = get_axis_value(kButtonId_Balance_Right);
 	const auto up = get_axis_value(kButtonId_Balance_Up);
@@ -226,8 +213,8 @@ BalanceBoardController::SourceInfo BalanceBoardController::get_source_info() con
 	if (!real.assigned)
 	{
 		info.source = Source::Emulated;
-		info.text = is_balance_mapped() ? "Emulated board: weight setting, balance from the mapped inputs"
-			: "Emulated board: weight setting, balance follows the mouse over the TV image";
+		info.text = is_balance_mapped() ? "Emulated board: weight setting, balance from its bindings"
+			: "Emulated board: weight setting, balance centred (no balance bindings)";
 		return info;
 	}
 	if (!is_real_source(real))

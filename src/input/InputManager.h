@@ -14,6 +14,7 @@
 #endif
 
 #include "input/api/Keyboard/KeyboardControllerProvider.h"
+#include "input/api/Mouse/MouseControllerProvider.h"
 #include "input/api/DSU/DSUControllerProvider.h"
 #include "input/api/GameCube/GameCubeControllerProvider.h"
 #include "input/api/RemoteGamePad/RemoteGamePadControllerProvider.h"
@@ -41,6 +42,8 @@ public:
 	bool load(size_t player_index, std::string_view filename = {});
 
 	bool migrate_config(const fs::path& file_path);
+	// an old profile's implicit mouse use as explicit Mouse bindings (adds the Mouse device)
+	static void add_implicit_mouse_bindings(EmulatedController& emulated_controller);
 
 	void save() noexcept;
 	bool save(size_t player_index, std::string_view filename = {});
@@ -89,11 +92,9 @@ public:
 		bool left_down_toggle = false;
 		bool right_down_toggle = false;
 	} m_main_mouse{}, m_pad_mouse{}, m_main_touch{}, m_pad_touch{};
+	// the windows' mouse positions (the imgui overlay). Emulated controllers don't read the mouse
+	// here (fork): the Mouse device (input/MouseState.h) is a binding source like any other
 	glm::ivec2 get_mouse_position(bool pad_window) const;
-	std::optional<glm::ivec2> get_left_down_mouse_info(bool* is_pad);
-	std::optional<glm::ivec2> get_right_down_mouse_info(bool* is_pad);
-
-	std::atomic<float> m_mouse_wheel;
 
 private:
 	void update_thread();

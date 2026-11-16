@@ -1,6 +1,7 @@
 #include "input/emulated/EmulatedController.h"
 
 #include "input/api/Controller.h"
+#include "input/api/Mouse/MouseInputs.h"
 
 #ifdef SUPPORTS_WIIMOTE
 #include "input/api/Wiimote/NativeWiimoteController.h"
@@ -247,6 +248,8 @@ namespace
 		std::optional<InputExpr::InputId> find_input(size_t dev, std::string_view name) const override
 		{
 			// input ids are small for every API except GTK key values (those are saved as #id)
+			if (m_controllers[dev]->api() == InputAPI::Mouse)
+				return MouseInputs::FromName(name);
 			constexpr uint64 kScanLimit = 0x200;
 			for (uint64 id = 0; id < kScanLimit; ++id)
 			{
@@ -257,7 +260,7 @@ namespace
 		}
 
 		float value(size_t dev, InputExpr::InputId id) const override { return m_controllers[dev]->get_axis_value(id); }
-		bool active(size_t dev, InputExpr::InputId id) const override { return m_controllers[dev]->get_state().buttons.GetButtonState((uint32)id); }
+		bool active(size_t dev, InputExpr::InputId id) const override { return m_controllers[dev]->is_input_active(id); }
 
 		size_t index_of(const ControllerBase& controller) const
 		{

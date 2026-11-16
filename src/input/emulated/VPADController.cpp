@@ -188,6 +188,52 @@ void VPADController::update()
 	}
 }
 
+namespace
+{
+	// half axes to -1..1: the stronger direction wins
+	float half_axes(float negative, float positive)
+	{
+		return std::clamp(negative > positive ? -negative : positive, -1.0f, 1.0f);
+	}
+}
+
+VPADController::TouchState VPADController::get_touch() const
+{
+	TouchState result;
+	// a device with absolute touch (Remote GamePad) while it is touched
+	if (has_position())
+	{
+		result.bound = true;
+		result.device = true;
+		result.touching = true;
+		result.position = get_position();
+		return result;
+	}
+	for (uint64 id = kButtonId_Touch_Up; id <= kButtonId_Touch_Press; ++id)
+		result.bound |= has_mapping(id);
+	if (!result.bound)
+		return result;
+	const float x = half_axes(get_axis_value(kButtonId_Touch_Left), get_axis_value(kButtonId_Touch_Right));
+	const float y = half_axes(get_axis_value(kButtonId_Touch_Up), get_axis_value(kButtonId_Touch_Down));
+	result.position = {(x + 1.0f) * 0.5f, (y + 1.0f) * 0.5f};
+	result.touching = is_mapping_down(kButtonId_Touch_Press);
+	return result;
+}
+
+VPADController::TiltState VPADController::get_tilt() const
+{
+	TiltState result;
+	for (uint64 id = kButtonId_Tilt_Up; id <= kButtonId_Turn_Right; ++id)
+		result.bound |= has_mapping(id);
+	if (!result.bound)
+		return result;
+	result.active = !has_mapping(kButtonId_Tilt_Hold) || is_mapping_down(kButtonId_Tilt_Hold);
+	result.tilt.x = half_axes(get_axis_value(kButtonId_Tilt_Left), get_axis_value(kButtonId_Tilt_Right));
+	result.tilt.y = half_axes(get_axis_value(kButtonId_Tilt_Up), get_axis_value(kButtonId_Tilt_Down));
+	result.turn = get_axis_value(kButtonId_Turn_Left) - get_axis_value(kButtonId_Turn_Right);
+	return result;
+}
+
 void VPADController::update_touch(VPADStatus_t& status)
 {
 	status.tpData.touch = kTpTouchOff;
@@ -197,43 +243,18 @@ void VPADController::update_touch(VPADStatus_t& status)
 	status.tpData.x = (uint16)m_last_touch_position.x;
 	status.tpData.y = (uint16)m_last_touch_position.y;
 
-	auto& instance = InputManager::instance();
-	bool pad_view;
-	if (has_position())
+	// fork: the touch screen only follows a device with touch or the Touch bindings (the mouse
+	// when they say so); there is no implicit mouse touch any more
+	const auto touch = get_touch();
+	if (touch.touching)
 	{
-		const auto mouse = get_position();
-
+		const glm::vec2 p = glm::clamp(touch.position, glm::vec2(0.0f), glm::vec2(1.0f));
 		status.tpData.touch = kTpTouchOn;
 		status.tpData.validity = kTpValid;
-		status.tpData.x = (uint16)(mouse.x * 3883.0f + 92.0f);
-		status.tpData.y = (uint16)(4095.0f - mouse.y * 3694.0f - 254.0f);
+		status.tpData.x = (uint16)(p.x * 3883.0f + 92.0f);
+		status.tpData.y = (uint16)(4095.0f - p.y * 3694.0f - 254.0f);
 
 		m_last_touch_position = glm::ivec2{status.tpData.x, status.tpData.y};
-	}
-	else if (const auto left_mouse = instance.get_left_down_mouse_info(&pad_view))
-	{
-		glm::ivec2 image_pos, image_size;
-		LatteRenderTarget_getScreenImageArea(&image_pos.x, &image_pos.y, &image_size.x, &image_size.y, nullptr, nullptr, pad_view);
-
-		glm::vec2 relative_mouse_pos = left_mouse.value() - image_pos;
-		relative_mouse_pos = { std::min(relative_mouse_pos.x, (float)image_size.x), std::min(relative_mouse_pos.y, (float)image_size.y) };
-		relative_mouse_pos = { std::max(relative_mouse_pos.x, 0.0f), std::max(relative_mouse_pos.y, 0.0f) };
-		relative_mouse_pos /= image_size;
-
-		status.tpData.touch = kTpTouchOn;
-		status.tpData.validity = kTpValid;
-		status.tpData.x = (uint16)((relative_mouse_pos.x * 3883.0f) + 92.0f);
-		status.tpData.y = (uint16)(4095.0f - (relative_mouse_pos.y * 3694.0f) - 254.0f);
-
-		m_last_touch_position = glm::ivec2{ status.tpData.x, status.tpData.y };
-
-		/*cemuLog_log(LogType::Force, "TDATA: {},{} -> {},{} -> {},{} -> {},{} -> {},{} -> {},{}",
-			left_mouse->x, left_mouse->y,
-			(left_mouse.value() - image_pos).x, (left_mouse.value() - image_pos).y,
-			relative_mouse_pos.x, relative_mouse_pos.y,
-			(uint16)(relative_mouse_pos.x * 3883.0 + 92.0), (uint16)(4095.0 - relative_mouse_pos.y * 3694.0 - 254.0),
-			status.tpData.x.value(), status.tpData.y.value(), status.tpData.x.bevalue(), status.tpData.y.bevalue()
-		);*/
 	}
 
 	status.tpProcessed1 = status.tpData;
@@ -285,77 +306,52 @@ void VPADController::update_motion(VPADStatus_t& status)
 		return;
 	}
 
-	bool pad_view;
-	auto& input_manager = InputManager::instance();
-	if (const auto right_mouse = input_manager.get_right_down_mouse_info(&pad_view))
+	// fork: emulated tilt from the Tilt bindings (by default the old mouse behaviour: drag with the
+	// right button to tilt, the wheel turns). The maths are Cemu's mouse tilt.
+	const auto tilt = get_tilt();
+	const auto now = std::chrono::steady_clock::now();
+	if (!tilt.active)
 	{
-		const Vector2<float> mousePos(right_mouse->x, right_mouse->y);
-
-		int w, h;
-		if (pad_view)
-			WindowSystem::GetPadWindowPhysSize(w, h);
-		else
-			WindowSystem::GetWindowPhysSize(w, h);
-
-		float wx = mousePos.x / w;
-		float wy = mousePos.y / h;
-
-		static glm::vec3 m_lastGyroRotation{}, m_startGyroRotation{};
-		static bool m_startGyroRotationSet{};
-
-		float rotX = (wy * 2 - 1.0f) * 135.0f; // up/down best
-		float rotY = (wx * 2 - 1.0f) * -180.0f; // left/right
-		float rotZ = input_manager.m_mouse_wheel * 14.0f + m_lastGyroRotation.z;
-		input_manager.m_mouse_wheel = 0.0f;
-
-		if (!m_startGyroRotationSet)
-		{
-			m_startGyroRotation = {rotX, rotY, rotZ};
-			m_startGyroRotationSet = true;
-		}
-
-		/*	debug_printf("\n\ngyro:\n<%.02f, %.02f, %.02f>\n\n",
-				rotX, rotY, rotZ);*/
-
-		Quaternion<float> q(rotX, rotY, rotZ);
-		auto rot = q.GetTransposedRotationMatrix();
-
-		/*m_forward = std::get<0>(rot);
-		m_right = std::get<1>(rot);
-		m_up = std::get<2>(rot);*/
-
-		status.dir.x = std::get<0>(rot);
-		status.dir.y = std::get<1>(rot);
-		status.dir.z = std::get<2>(rot);
-
-		/*debug_printf("rot:\n<%.02f, %.02f, %.02f>\n<%.02f, %.02f, %.02f>\n<%.02f, %.02f, %.02f>\n\n",
-			(float)status.dir.x.x, (float)status.dir.x.y, (float)status.dir.x.z,
-			(float)status.dir.y.x, (float)status.dir.y.y, (float)status.dir.y.z,
-			(float)status.dir.z.x, (float)status.dir.z.y, (float)status.dir.z.z);*/
-
-		glm::vec3 rotation(rotX - m_lastGyroRotation.x, (rotY - m_lastGyroRotation.y) * 15.0f,
-		                   rotZ - m_lastGyroRotation.z);
-
-		rotation.x = std::min(1.0f, std::max(-1.0f, rotation.x / 360.0f));
-		rotation.y = std::min(1.0f, std::max(-1.0f, rotation.y / 360.0f));
-		rotation.z = std::min(1.0f, std::max(-1.0f, rotation.z / 360.0f));
-
-		/*debug_printf("\n\ngyro:\n<%.02f, %.02f, %.02f>\n\n",
-			rotation.x, rotation.y, rotation.z);*/
-
-		constexpr float pi2 = (float)(M_PI * 2);
-		status.gyroChange = {rotation.x, rotation.y, rotation.z};
-		status.gyroOrientation = {rotation.x, rotation.y, rotation.z};
-		//status.angle = { rotation.x / pi2, rotation.y / pi2, rotation.z / pi2 };
-
-		status.acc = {rotation.x, rotation.y, rotation.z};
-		status.accAcceleration = 1.0f;
-		status.accMagnitude = 1.0f;
-
-		status.accXY = {1.0f, 0.0f};
-
-		m_lastGyroRotation = {rotX, rotY, rotZ};
+		m_last_tilt = {};
+		return;
 	}
+	// the wheel turned 14 degrees per notch; a turn input turns at 140 degrees per second (one
+	// notch is pressed for 100 ms)
+	if (m_last_tilt != std::chrono::steady_clock::time_point{})
+	{
+		const float dt = std::min(0.1f, std::chrono::duration<float>(now - m_last_tilt).count());
+		m_turn += tilt.turn * 140.0f * dt;
+	}
+	m_last_tilt = now;
+
+	const float rotX = tilt.tilt.y * 135.0f; // up/down best
+	const float rotY = tilt.tilt.x * -180.0f; // left/right
+	const float rotZ = m_turn;
+
+	Quaternion<float> q(rotX, rotY, rotZ);
+	auto rot = q.GetTransposedRotationMatrix();
+
+	status.dir.x = std::get<0>(rot);
+	status.dir.y = std::get<1>(rot);
+	status.dir.z = std::get<2>(rot);
+
+	glm::vec3 rotation(rotX - m_last_gyro_rotation.x, (rotY - m_last_gyro_rotation.y) * 15.0f,
+	                   rotZ - m_last_gyro_rotation.z);
+
+	rotation.x = std::min(1.0f, std::max(-1.0f, rotation.x / 360.0f));
+	rotation.y = std::min(1.0f, std::max(-1.0f, rotation.y / 360.0f));
+	rotation.z = std::min(1.0f, std::max(-1.0f, rotation.z / 360.0f));
+
+	status.gyroChange = {rotation.x, rotation.y, rotation.z};
+	status.gyroOrientation = {rotation.x, rotation.y, rotation.z};
+
+	status.acc = {rotation.x, rotation.y, rotation.z};
+	status.accAcceleration = 1.0f;
+	status.accMagnitude = 1.0f;
+
+	status.accXY = {1.0f, 0.0f};
+
+	m_last_gyro_rotation = {rotX, rotY, rotZ};
 }
 
 
@@ -388,6 +384,18 @@ std::string_view VPADController::get_button_name(ButtonId id)
 	case kButtonId_StickR_Left: return TR_NOOP("left");
 	case kButtonId_StickR_Right: return TR_NOOP("right");
 	case kButtonId_Home: return TR_NOOP("home");
+	case kButtonId_Touch_Up: return TR_NOOP("up");
+	case kButtonId_Touch_Down: return TR_NOOP("down");
+	case kButtonId_Touch_Left: return TR_NOOP("left");
+	case kButtonId_Touch_Right: return TR_NOOP("right");
+	case kButtonId_Touch_Press: return TR_NOOP("touch");
+	case kButtonId_Tilt_Up: return TR_NOOP("tilt up");
+	case kButtonId_Tilt_Down: return TR_NOOP("tilt down");
+	case kButtonId_Tilt_Left: return TR_NOOP("tilt left");
+	case kButtonId_Tilt_Right: return TR_NOOP("tilt right");
+	case kButtonId_Turn_Left: return TR_NOOP("turn left");
+	case kButtonId_Turn_Right: return TR_NOOP("turn right");
+	case kButtonId_Tilt_Hold: return TR_NOOP("hold to tilt");
 	default:
 		cemu_assert_debug(false);
 		return "";
@@ -666,6 +674,9 @@ std::vector<std::pair<uint64, uint64>> VPADController::get_default_mapping(const
 		});
 		break;
 	}
+	case InputAPI::Mouse:
+		mapping = MouseBindings::MouseDefaults(MouseBindings::kTypeGamePad);
+		break;
 	case InputAPI::XInput:
 	{
 		mapping =

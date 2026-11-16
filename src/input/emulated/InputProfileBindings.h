@@ -3,7 +3,7 @@
 // Bindings in the controller profile XML (fork addition, see INPUT_REWORK.md).
 //
 // New format: one expression per emulated control, after the <controller> (device) nodes:
-//   <bindings>
+//   <bindings version="2">
 //     <binding id="1">`Keyboard/keyboard:X` | `RemoteGamePad/26770:Button 1`</binding>
 //   </bindings>
 // Old format (still read when <bindings> is missing, and still written so older Cemu builds load
@@ -26,7 +26,10 @@ namespace InputProfile
 {
 	bool HasBindings(const pugi::xml_node& root);
 	std::map<uint64_t, std::string> ReadBindings(const pugi::xml_node& root);
-	void WriteBindings(pugi::xml_node& root, const std::map<uint64_t, std::string>& bindings);
+	// 0: no <bindings> (old format), 1: <bindings> without a version (the mouse was still implicit),
+	// 2: <bindings version="2"> (mouse use is explicit, see MouseBindings.h)
+	int BindingsVersion(const pugi::xml_node& root);
+	void WriteBindings(pugi::xml_node& root, const std::map<uint64_t, std::string>& bindings, int version = 2);
 
 	std::vector<std::pair<uint64_t, uint64_t>> ReadLegacyMappings(const pugi::xml_node& controller_node);
 	void WriteLegacyMappings(pugi::xml_node& controller_node, const std::vector<std::pair<uint64_t, uint64_t>>& mappings);

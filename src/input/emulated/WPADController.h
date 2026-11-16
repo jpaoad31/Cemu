@@ -126,6 +126,17 @@ public:
 	// kDataFormat_BALANCE_CHECKER: fills press[], temp and battery (BalanceBoardController)
 	virtual void fill_balance_status(WPADBLStatus_t& status) {}
 
+	// the pointer (DPD) for KPAD: pos and prev 0..1 (top left origin), visibility. The default
+	// takes it from a device with a position (a real Wii Remote's IR); the emulated Wii Remote adds
+	// its Pointer bindings (fork, see WiimoteController::get_pointer)
+	struct PointerSample
+	{
+		PositionVisibility visibility = PositionVisibility::NONE;
+		glm::vec2 position{};
+		glm::vec2 previous{};
+	};
+	virtual PointerSample get_kpad_pointer();
+
 	// the real Wii Remote among this controller's inputs (API Wiimote), if any
 	std::shared_ptr<class NativeWiimoteController> get_native_wiimote() const;
 

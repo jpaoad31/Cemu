@@ -3,6 +3,7 @@
 #include "input/ControllerFactory.h"
 #include "input/emulated/BalanceBoardController.h"
 #include "input/emulated/InputProfileBindings.h"
+#include "input/emulated/MouseBindings.h"
 #include "input/InputDiagnostics.h"
 #include <boost/property_tree/ini_parser.hpp>
 #include <pugixml.hpp>
@@ -31,6 +32,7 @@ InputManager::InputManager()
 #if HAS_KEYBOARD
 	create_provider<KeyboardControllerProvider>();
 #endif
+	create_provider<MouseControllerProvider>();
 #ifdef HAS_SDL
 	create_provider<SDLControllerProvider>();
 #endif
@@ -206,6 +208,12 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 			}
 		}
 
+		// profiles from before the mouse groups: what the mouse did implicitly (GamePad touch and
+		// right-drag tilt, the emulated board's balance) becomes explicit Mouse bindings, so nothing
+		// changes until they're edited (see MouseBindings.h)
+		if (InputProfile::BindingsVersion(root) < MouseBindings::kBindingsVersion)
+			add_implicit_mouse_bindings(*emulated_controller);
+
 		set_controller(emulated_controller);
 		return true;
 	}
@@ -214,6 +222,23 @@ bool InputManager::load(size_t player_index, std::string_view filename)
 		cemuLog_log(LogType::Force, "can't load config file: {}", ex.what());
 		return false;
 	}
+}
+
+void InputManager::add_implicit_mouse_bindings(EmulatedController& emulated_controller)
+{
+	std::map<uint64_t, std::string> bindings;
+	for (const auto mapping : emulated_controller.get_mapping_ids())
+		bindings[mapping] = emulated_controller.get_mapping_expression(mapping);
+	const auto& devices = emulated_controller.get_controllers();
+	const bool has_wii_device = std::any_of(devices.cbegin(), devices.cend(), [](const auto& c) { return c->api() == InputAPI::Wiimote; });
+	const auto added = MouseBindings::ImplicitMouseBindings(emulated_controller.type_string(), bindings, has_wii_device);
+	if (added.empty())
+		return;
+	if (std::none_of(devices.cbegin(), devices.cend(), [](const auto& c) { return c->api() == InputAPI::Mouse; }))
+		emulated_controller.add_controller(ControllerFactory::CreateController(InputAPI::Mouse, "mouse", "Mouse"));
+	for (const auto& [mapping, text] : added)
+		emulated_controller.set_mapping_expression(mapping, text);
+	cemuLog_log(LogType::InputAPI, "controller {}: old profile, the mouse's implicit use became {} explicit binding(s)", emulated_controller.player_index() + 1, added.size());
 }
 
 bool InputManager::migrate_config(const fs::path& file_path)
@@ -880,100 +905,6 @@ glm::ivec2 InputManager::get_mouse_position(bool pad_window) const
 		std::shared_lock lock(m_main_mouse.m_mutex);
 		return m_main_mouse.position;
 	}
-}
-
-std::optional<glm::ivec2> InputManager::get_left_down_mouse_info(bool* is_pad)
-{
-	if (is_pad)
-		*is_pad = false;
-
-	{
-		std::unique_lock lock(m_main_mouse.m_mutex);
-		if (std::exchange(m_main_mouse.left_down_toggle, false))
-			return m_main_mouse.position;
-
-		if (m_main_mouse.left_down)
-			return m_main_mouse.position;
-	}
-
-	{
-		std::unique_lock lock(m_main_touch.m_mutex);
-		if (std::exchange(m_main_touch.left_down_toggle, false))
-			return m_main_touch.position;
-
-		if (m_main_touch.left_down)
-			return m_main_touch.position;
-	}
-
-	if (is_pad)
-		*is_pad = true;
-
-	{
-		std::unique_lock lock(m_pad_mouse.m_mutex);
-		if (std::exchange(m_pad_mouse.left_down_toggle, false))
-			return m_pad_mouse.position;
-
-		if (m_pad_mouse.left_down)
-			return m_pad_mouse.position;
-	}
-
-	{
-		std::unique_lock lock(m_pad_touch.m_mutex);
-		if (std::exchange(m_pad_touch.left_down_toggle, false))
-			return m_pad_touch.position;
-
-		if (m_pad_touch.left_down)
-			return m_pad_touch.position;
-	}
-
-	return {};
-}
-
-std::optional<glm::ivec2> InputManager::get_right_down_mouse_info(bool* is_pad)
-{
-	if (is_pad)
-		*is_pad = false;
-
-	{
-		std::unique_lock lock(m_main_mouse.m_mutex);
-		if (std::exchange(m_main_mouse.right_down_toggle, false))
-			return m_main_mouse.position;
-
-		if (m_main_mouse.right_down)
-			return m_main_mouse.position;
-	}
-
-	{
-		std::unique_lock lock(m_main_touch.m_mutex);
-		if (std::exchange(m_main_touch.right_down_toggle, false))
-			return m_main_touch.position;
-
-		if (m_main_touch.right_down)
-			return m_main_touch.position;
-	}
-
-	if (is_pad)
-		*is_pad = true;
-
-	{
-		std::unique_lock lock(m_pad_mouse.m_mutex);
-		if (std::exchange(m_pad_mouse.right_down_toggle, false))
-			return m_pad_mouse.position;
-
-		if (m_pad_mouse.right_down)
-			return m_pad_mouse.position;
-	}
-
-	{
-		std::unique_lock lock(m_pad_touch.m_mutex);
-		if (std::exchange(m_pad_touch.right_down_toggle, false))
-			return m_pad_touch.position;
-
-		if (m_pad_touch.right_down)
-			return m_pad_touch.position;
-	}
-
-	return {};
 }
 
 void InputManager::update_thread()

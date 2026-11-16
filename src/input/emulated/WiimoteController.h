@@ -1,6 +1,7 @@
 #pragma once
 
 #include "input/emulated/WPADController.h"
+#include "input/emulated/MouseBindings.h"
 
 class WiimoteController : public WPADController
 {
@@ -36,6 +37,14 @@ public:
 		kButtonId_Home,
 
 		kButtonId_Max,
+
+		// fork: the pointer (IR) group, like Dolphin's Point (MouseBindings.h); outside the button loop
+		kButtonId_Pointer_Up = MouseBindings::kPointerUp,
+		kButtonId_Pointer_Down = MouseBindings::kPointerDown,
+		kButtonId_Pointer_Left = MouseBindings::kPointerLeft,
+		kButtonId_Pointer_Right = MouseBindings::kPointerRight,
+		kButtonId_Pointer_Hide = MouseBindings::kPointerHide,
+		kButtonId_Pointer_Recenter = MouseBindings::kPointerRecenter,
 	};
 
 	WiimoteController(size_t player_index);
@@ -48,7 +57,32 @@ public:
 
 	uint32 get_emulated_button_flag(uint32 id) const override;
 	size_t get_highest_mapping_id() const override { return kButtonId_Max; }
-	bool is_axis_mapping(uint64 mapping) const override { return mapping >= kButtonId_Nunchuck_Up && mapping <= kButtonId_Nunchuck_Right; }
+	bool is_axis_mapping(uint64 mapping) const override
+	{
+		return (mapping >= kButtonId_Nunchuck_Up && mapping <= kButtonId_Nunchuck_Right)
+			|| (mapping >= kButtonId_Pointer_Up && mapping <= kButtonId_Pointer_Right);
+	}
+
+	// Pointer settings (Dolphin's Point group): where the binding's -1..1 range lands on the screen
+	struct PointerSettings
+	{
+		float center_x = 0, center_y = 0; // offset, in screen halves (-1..1)
+		float width = 1, height = 1;      // 1 = the binding's full range covers the screen
+		bool relative = false;            // the binding moves the pointer (speed) instead of placing it
+		bool auto_hide = false;           // hide it after 2 s without movement
+	};
+	PointerSettings get_pointer_settings() const;
+	void set_pointer_settings(const PointerSettings& settings);
+
+	// the pointer from the bindings (0..1, top left origin); also steps the relative mode
+	struct PointerState
+	{
+		bool bound = false;
+		bool visible = false;
+		glm::vec2 position{};
+	};
+	PointerState get_pointer();
+	PointerSample get_kpad_pointer() override;
 
 	std::vector<std::pair<uint64, uint64>> get_default_mapping(const std::shared_ptr<ControllerBase>& controller) const override;
 
@@ -74,4 +108,11 @@ public:
 
 private:
 	WPADDeviceType m_device_type = kWAPDevCore;
+
+	mutable std::mutex m_pointer_mutex;
+	PointerSettings m_pointer_settings;
+	glm::vec2 m_pointer_relative{};  // relative mode: the pointer, -1..1
+	glm::vec2 m_pointer_last{};      // last position (auto hide, previous for KPAD)
+	glm::vec2 m_pointer_prev{};
+	std::chrono::steady_clock::time_point m_pointer_step{}, m_pointer_moved{};
 };

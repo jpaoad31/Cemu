@@ -28,6 +28,17 @@ std::shared_ptr<NativeWiimoteController> WPADController::get_native_wiimote() co
 	return {};
 }
 
+WPADController::PointerSample WPADController::get_kpad_pointer()
+{
+	PointerSample result;
+	if (!has_position())
+		return result;
+	result.visibility = GetPositionVisibility();
+	result.position = get_position();
+	result.previous = get_prev_position();
+	return result;
+}
+
 WPADDataFormat WPADController::get_default_data_format() const
 {
 	switch (get_device_type())
@@ -335,21 +346,21 @@ void WPADController::KPADRead(KPADStatus_t& status, const BtnRepeat& repeat)
 			status.mpls.dir.Z.z = attitude[8];
 		}
 	}
-	auto visibility = GetPositionVisibility();
-	if (has_position() && visibility != PositionVisibility::NONE)
+	const auto pointer = get_kpad_pointer();
+	if (pointer.visibility != PositionVisibility::NONE)
 	{
-		if (visibility == PositionVisibility::FULL)
+		if (pointer.visibility == PositionVisibility::FULL)
 			status.dpd_valid_fg = 2;
 		else
 			status.dpd_valid_fg = -1;
 
-		const auto position = get_position();
+		const auto position = pointer.position;
 
 		const auto pos = (position * 2.0f) - 1.0f;
 		status.pos.x = pos.x;
 		status.pos.y = pos.y;
 
-		const auto delta = position - get_prev_position();
+		const auto delta = position - pointer.previous;
 		status.vec.x = delta.x;
 		status.vec.y = delta.y;
 		status.speed = glm::length(delta);

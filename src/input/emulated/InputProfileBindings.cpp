@@ -49,9 +49,18 @@ namespace InputProfile
 		return result;
 	}
 
-	void WriteBindings(pugi::xml_node& root, const std::map<uint64_t, std::string>& bindings)
+	int BindingsVersion(const pugi::xml_node& root)
+	{
+		const auto node = root.child("bindings");
+		if (!node)
+			return 0;
+		return node.attribute("version").as_int(1);
+	}
+
+	void WriteBindings(pugi::xml_node& root, const std::map<uint64_t, std::string>& bindings, int version)
 	{
 		auto node = root.append_child("bindings");
+		node.append_attribute("version") = version;
 		for (const auto& [id, text] : bindings)
 		{
 			if (text.empty())

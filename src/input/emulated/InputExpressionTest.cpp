@@ -4,10 +4,12 @@
 //   P=build/vcpkg_installed/arm64-osx
 //   clang++ -std=c++20 -Wall -I src -I $P/include src/input/emulated/InputExpressionTest.cpp \
 //     src/input/emulated/InputExpression.cpp src/input/emulated/InputProfileBindings.cpp \
-//     $P/lib/libpugixml.a -o /tmp/exprtest && /tmp/exprtest
+//     src/input/emulated/MouseBindings.cpp $P/lib/libpugixml.a -o /tmp/exprtest && /tmp/exprtest
 
 #include "input/emulated/InputExpression.h"
 #include "input/emulated/InputProfileBindings.h"
+#include "input/emulated/MouseBindings.h"
+#include "input/api/Mouse/MouseInputs.h"
 
 #include <pugixml.hpp>
 
@@ -329,12 +331,206 @@ static void test_profile()
 	CHECK(InputProfile::ReadBindings(in2.document_element()) == texts);
 }
 
+
+// the keyboard and the Mouse device (its input names from MouseInputs, as MouseController has them)
+struct MouseDevices : DeviceSet, InputSource
+{
+	std::map<std::pair<size_t, InputId>, float> values;
+	size_t device_count() const override { return 2; }
+	std::string device_api(size_t d) const override { return d == 0 ? "Keyboard" : "Mouse"; }
+	std::string device_uuid(size_t d) const override { return d == 0 ? "keyboard" : "mouse"; }
+	std::string device_display_name(size_t d) const override { return d == 0 ? "Keyboard" : "Mouse"; }
+	std::string input_name(size_t d, InputId id) const override
+	{
+		if (d == 1)
+			return MouseInputs::Name(id);
+		return std::string(1, (char)('A' + id));
+	}
+	std::optional<InputId> find_input(size_t d, std::string_view name) const override
+	{
+		if (d == 1)
+			return MouseInputs::FromName(name);
+		if (name.size() == 1 && name[0] >= 'A' && name[0] <= 'Z')
+			return (InputId)(name[0] - 'A');
+		return std::nullopt;
+	}
+	float value(size_t d, InputId id) const override
+	{
+		const auto it = values.find({d, id});
+		return it == values.end() ? 0.0f : it->second;
+	}
+	// as MouseController: buttons/wheel pressed when set, cursor and motion past half way
+	bool active(size_t d, InputId id) const override
+	{
+		const float v = value(d, id);
+		return d == 1 && !MouseInputs::IsPressable(id) ? std::abs(v) > 0.5f : v > 0.1f;
+	}
+};
+
+static void test_mouse_inputs()
+{
+	using namespace MouseInputs;
+	// names: every input of every window maps back to its id, case-insensitively
+	for (const auto id : AllIds())
+	{
+		CHECK(IsValid(id));
+		CHECK(FromName(Name(id)) == std::optional<uint64_t>(id));
+	}
+	CHECK_EQ(AllIds().size(), (size_t)kWindowCount * (size_t)kInputCount);
+	CHECK_EQ(Name(Id(kGamePad, kLeft)), std::string("GamePad Left"));
+	CHECK_EQ(Name(Id(kTV, kCursorYN)), std::string("TV Cursor Y-"));
+	CHECK_EQ(Name(Id(kAny, kWheelUp)), std::string("Wheel Up"));
+	CHECK(FromName("gamepad cursor x+") == std::optional<uint64_t>(Id(kGamePad, kCursorXP)));
+	CHECK(!FromName("Cursor Z").has_value());
+	CHECK(IsPressable(Id(kTV, kRight)) && IsPressable(Id(kAny, kWheelDown)));
+	CHECK(!IsPressable(Id(kTV, kCursorX)) && !IsPressable(Id(kAny, kMoveXP)));
+	// ids stay below the expression code's name scan limit and the old profile format's range
+	CHECK(AllIds().back() < 0x200);
+
+	MouseDevices dev;
+	// parse and print: the window prefix and the +/- are part of the name
+	auto e = Expression::parse("`Mouse:GamePad Cursor X+` | `Mouse/mouse:wheel up`", dev);
+	CHECK(e.ok());
+	CHECK(e.warnings().empty());
+	CHECK_EQ(e.text(), std::string("`Mouse/mouse:GamePad Cursor X+` | `Mouse/mouse:Wheel Up`"));
+	CHECK_EQ(e.display(dev, true), std::string("GamePad Cursor X+ [Mouse] | Wheel Up [Mouse]"));
+	CHECK(!Expression::parse("`Mouse:Cursor W`", dev).warnings().empty());
+
+	// analogue values: a half axis gives the deflection, the full axis is signed
+	dev.values[{1, Id(kGamePad, kCursorXP)}] = 0.4f;
+	CHECK(std::abs(e.value(dev) - 0.4f) < 1e-5f);
+	CHECK(!e.active(dev));
+	dev.values[{1, Id(kGamePad, kCursorXP)}] = 0.8f;
+	CHECK(e.active(dev));
+	dev.values[{1, Id(kTV, kCursorX)}] = -0.75f;
+	auto full = Expression::parse("`Mouse:TV Cursor X`", dev);
+	CHECK(std::abs(full.value(dev) + 0.75f) < 1e-5f);
+	// keyboard keys and the cursor combine like any inputs: a key steers, the mouse adds
+	auto mixed = Expression::parse("`Keyboard:D` | `Mouse:TV Cursor X+` * 0.5", dev);
+	CHECK(mixed.ok());
+	dev.values[{1, Id(kTV, kCursorXP)}] = 1.0f;
+	CHECK(std::abs(mixed.value(dev) - 0.5f) < 1e-5f);
+	dev.values[{0, 3}] = 1.0f;
+	CHECK(std::abs(mixed.value(dev) - 1.0f) < 1e-5f);
+	// relative motion only while a button is held
+	auto drag = Expression::parse("`Mouse:Move X+` & `Mouse:Right`", dev);
+	dev.values[{1, Id(kAny, kMoveXP)}] = 0.6f;
+	CHECK(!drag.active(dev));
+	CHECK(drag.value(dev) == 0.0f);
+	dev.values[{1, Id(kAny, kRight)}] = 1.0f;
+	CHECK(std::abs(drag.value(dev) - 0.6f) < 1e-5f);
+	// clicks and the wheel are buttons
+	auto click = Expression::parse("`Mouse:GamePad Left`", dev);
+	CHECK(!click.active(dev));
+	dev.values[{1, Id(kGamePad, kLeft)}] = 1.0f;
+	CHECK(click.active(dev));
+}
+
+// a GamePad profile written by the input rework before the mouse groups: <bindings> without a
+// version, keyboard buttons, nothing for touch or motion
+static const char* kReworkProfile = R"(<?xml version="1.0" encoding="UTF-8"?>
+<emulated_controller>
+	<type>Wii U GamePad</type>
+	<controller><api>Keyboard</api><uuid>keyboard</uuid><display_name>Keyboard</display_name></controller>
+	<bindings>
+		<binding id="1">`Keyboard/keyboard:X`</binding>
+	</bindings>
+</emulated_controller>
+)";
+
+static void test_mouse_conversion()
+{
+	using namespace MouseBindings;
+	MouseDevices dev;
+
+	// version: old format 0, rework 1, explicit mouse 2
+	{
+		pugi::xml_document old_doc, rework;
+		CHECK(old_doc.load_string(kOldProfile));
+		CHECK(rework.load_string(kReworkProfile));
+		CHECK_EQ(InputProfile::BindingsVersion(old_doc.document_element()), 0);
+		CHECK_EQ(InputProfile::BindingsVersion(rework.document_element()), 1);
+		pugi::xml_document out;
+		auto root = out.append_child("emulated_controller");
+		InputProfile::WriteBindings(root, {{1, "`Keyboard/keyboard:X`"}});
+		CHECK_EQ(InputProfile::BindingsVersion(root), kBindingsVersion);
+	}
+
+	// GamePad: the implicit touch and right-drag tilt become Mouse bindings
+	pugi::xml_document doc;
+	CHECK(doc.load_string(kReworkProfile));
+	auto bindings = InputProfile::ReadBindings(doc.document_element());
+	auto added = ImplicitMouseBindings(kTypeGamePad, bindings, false);
+	CHECK_EQ(added.size(), (size_t)12);
+	CHECK_EQ(added[kTouchPress], std::string("`Mouse/mouse:GamePad Left`"));
+	CHECK_EQ(added[kTouchLeft], std::string("`Mouse/mouse:GamePad Cursor X-`"));
+	CHECK_EQ(added[kTouchDown], std::string("`Mouse/mouse:GamePad Cursor Y+`"));
+	CHECK_EQ(added[kTiltHold], std::string("`Mouse/mouse:Right`"));
+	CHECK_EQ(added[kTiltUp], std::string("`Mouse/mouse:Cursor Y-`"));
+	CHECK_EQ(added[kTurnLeft], std::string("`Mouse/mouse:Wheel Up`"));
+	CHECK(!added.contains(1));
+	// they parse against a device list with the mouse, with no warnings
+	for (const auto& [control, text] : added)
+	{
+		const auto e = Expression::parse(text, dev);
+		CHECK(e.ok());
+		CHECK(e.warnings().empty());
+		CHECK_EQ(e.text(), text);
+	}
+	// what they do: touching with the left button in the GamePad window, at the cursor
+	{
+		const auto press = Expression::parse(added[kTouchPress], dev);
+		const auto right = Expression::parse(added[kTouchRight], dev);
+		dev.values[{1, MouseInputs::Id(MouseInputs::kGamePad, MouseInputs::kCursorXP)}] = 0.5f;
+		CHECK(!press.active(dev));
+		dev.values[{1, MouseInputs::Id(MouseInputs::kGamePad, MouseInputs::kLeft)}] = 1.0f;
+		CHECK(press.active(dev));
+		CHECK(std::abs(right.value(dev) - 0.5f) < 1e-5f);
+	}
+
+	// a group that is already bound (by the user) is left alone; the other one is still added
+	bindings[kTouchPress] = "`Keyboard/keyboard:T`";
+	added = ImplicitMouseBindings(kTypeGamePad, bindings, false);
+	CHECK_EQ(added.size(), (size_t)7);
+	CHECK(!added.contains(kTouchPress) && added.contains(kTiltHold));
+
+	// Balance Board: the cursor over the TV is the centre of balance, unless the balance is bound or
+	// a real board (Wiimote API device) is assigned
+	added = ImplicitMouseBindings(kTypeBoard, {{1, "`Keyboard/keyboard:P`"}}, false);
+	CHECK_EQ(added.size(), (size_t)4);
+	CHECK_EQ(added[kBalanceUp], std::string("`Mouse/mouse:TV Cursor Y-`"));
+	CHECK_EQ(added[kBalanceRight], std::string("`Mouse/mouse:TV Cursor X+`"));
+	CHECK(ImplicitMouseBindings(kTypeBoard, {}, true).empty());
+	CHECK(ImplicitMouseBindings(kTypeBoard, {{kBalanceLeft, "`Keyboard/keyboard:A`"}}, false).empty());
+
+	// the mouse did nothing for the Wii Remote, Pro and Classic controllers
+	CHECK(ImplicitMouseBindings(kTypeWiimote, {}, false).empty());
+	CHECK(ImplicitMouseBindings("Wii U Pro Controller", {}, false).empty());
+
+	// the Mouse device's defaults: touch + tilt on the GamePad, pointer + A/B on the Wii Remote
+	CHECK_EQ(MouseDefaults(kTypeGamePad).size(), (size_t)12);
+	CHECK_EQ(MouseDefaults(kTypeWiimote).size(), (size_t)6);
+	CHECK_EQ(MouseDefaults(kTypeBoard).size(), (size_t)4);
+
+	// after conversion the profile is saved as version 2 and isn't converted again
+	pugi::xml_document out;
+	auto root = out.append_child("emulated_controller");
+	InputProfile::WriteBindings(root, bindings);
+	std::ostringstream xml;
+	out.save(xml);
+	pugi::xml_document in;
+	CHECK(in.load_string(xml.str().c_str()));
+	CHECK(InputProfile::BindingsVersion(in.document_element()) >= kBindingsVersion);
+}
+
 int main()
 {
 	test_parse_and_print();
 	test_eval();
 	test_list_editing();
 	test_profile();
+	test_mouse_inputs();
+	test_mouse_conversion();
 	if (g_failures)
 	{
 		std::printf("%d failure(s)\n", g_failures);

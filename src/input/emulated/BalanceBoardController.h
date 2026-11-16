@@ -9,7 +9,7 @@
 // The load cell maths come from Dolphin's emulated board (see BalanceBoardMath.h).
 //
 // Two sources:
-// - emulated (default): weight setting, Balance stick or mouse, step off hotkeys;
+// - emulated (default): weight setting, Balance bindings (a stick, keys, the mouse cursor), step off hotkeys;
 // - a real board: when a "Wiimote" API controller is assigned to this controller, the game gets
 //   that board's raw load cells, temperature and battery and the calibration read from it
 //   (WiimoteControllerProvider reads them, see BalanceBoardData). The settings sliders and the
@@ -92,11 +92,9 @@ public:
 
 	std::vector<std::pair<uint64, uint64>> get_default_mapping(const std::shared_ptr<ControllerBase>& controller) const override;
 
-	// centre of balance from the Balance stick (x: right, y: front), or from the mouse when the
-	// stick is unmapped
+	// centre of balance from the Balance bindings (x: right, y: front)
 	glm::vec2 get_axis() const override;
 	bool is_balance_mapped() const;
-	static glm::vec2 get_mouse_axis();
 	glm::vec2 get_rotation() const override { return {}; }
 	glm::vec2 get_trigger() const override { return {}; }
 

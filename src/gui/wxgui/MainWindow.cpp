@@ -8,6 +8,7 @@
 #include "GraphicPacksWindow2.h"
 #include "AudioDebuggerWindow.h"
 #include "input/InputSettings2.h"
+#include "input/MouseFeed.h"
 #include "input/HotkeySettings.h"
 #include "debugger/DebuggerWindow2.h"
 #include "EmulatedUSBDevices/EmulatedUSBDeviceFrame.h"
@@ -1662,6 +1663,8 @@ void MainWindow::CreateCanvas()
 	m_render_canvas->Bind(wxEVT_RIGHT_UP, &MainWindow::OnMouseRight, this);
 
 	m_render_canvas->Bind(wxEVT_GESTURE_PAN, &MainWindow::OnGesturePan, this);
+	// the Mouse device (fork): bindings decide what the mouse does
+	BindMouseFeed(m_render_canvas, MouseState::kMainWindow);
 
 	// key events
 	m_render_canvas->Bind(wxEVT_KEY_UP, &MainWindow::OnKeyUp, this);
@@ -1776,10 +1779,8 @@ void MainWindow::OnMemorySearcherClose(wxCloseEvent& event)
 
 void MainWindow::OnMouseWheel(wxMouseEvent& event)
 {
-	const float delta = event.GetWheelRotation(); // in 120 steps -> max reached ~480 (?)
-	auto& instance = InputManager::instance();
-	instance.m_mouse_wheel = (delta / 120.0f);
-
+	// the wheel goes to the Mouse device (BindMouseFeed); it no longer turns the GamePad unless a
+	// binding says so
 	event.Skip();
 }
 

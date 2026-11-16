@@ -19,6 +19,9 @@ namespace InputAPI
 
 		RemoteGamePad,
 
+		// fork: the mouse over Cemu's game windows (cursor, buttons, wheel), see api/Mouse
+		Mouse,
+
 		MAX
 	};
 
@@ -46,6 +49,8 @@ namespace InputAPI
 			return "SDLController";
 		case RemoteGamePad:
 			return "RemoteGamePad";
+		case Mouse:
+			return "Mouse";
 		default:
 			break;
 		}
@@ -71,6 +76,8 @@ namespace InputAPI
 			return SDLController;
 		else if (str == to_string(RemoteGamePad))
 			return RemoteGamePad;
+		else if (str == to_string(Mouse))
+			return Mouse;
 		else if (str == "DSU") // legacy
 			return DSUClient;
 		

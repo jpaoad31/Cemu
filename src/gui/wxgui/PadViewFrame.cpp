@@ -19,6 +19,7 @@
 #include "wxgui/MainWindow.h"
 #include "wxgui/helpers/wxHelpers.h"
 #include "input/InputManager.h"
+#include "wxgui/input/MouseFeed.h"
 
 #if BOOST_OS_LINUX || BOOST_OS_MACOS || BOOST_OS_BSD
 #include "resource/embedded/resources.h"
@@ -107,6 +108,8 @@ void PadViewFrame::InitializeRenderCanvas()
 	m_render_canvas->Bind(wxEVT_RIGHT_UP, &PadViewFrame::OnMouseRight, this);
 
 	m_render_canvas->Bind(wxEVT_GESTURE_PAN, &PadViewFrame::OnGesturePan, this);
+	// the Mouse device (fork): bindings decide what the mouse does
+	BindMouseFeed(m_render_canvas, MouseState::kPadWindow);
 
 	m_render_canvas->SetFocus();
 	SendSizeEvent();
@@ -183,6 +186,7 @@ void PadViewFrame::OnGesturePan(wxPanGestureEvent& event)
 	instance.m_pad_touch.left_down = event.IsGestureStart() || !event.IsGestureEnd();
 	if (event.IsGestureStart() || !event.IsGestureEnd())
 		instance.m_pad_touch.left_down_toggle = true;
+	event.Skip();
 }
 
 void PadViewFrame::OnChar(wxKeyEvent& event)
@@ -197,7 +201,7 @@ void PadViewFrame::OnMouseMove(wxMouseEvent& event)
 {
 	auto& instance = InputManager::instance();
 
-	std::scoped_lock lock(instance.m_pad_touch.m_mutex);
+	std::scoped_lock lock(instance.m_pad_mouse.m_mutex);
 	auto physPos = ToPhys(event.GetPosition());
 	instance.m_pad_mouse.position = { physPos.x, physPos.y };
 
@@ -214,7 +218,7 @@ void PadViewFrame::OnMouseLeft(wxMouseEvent& event)
 	instance.m_pad_mouse.position = { physPos.x, physPos.y };
 	if (event.ButtonDown(wxMOUSE_BTN_LEFT))
 		instance.m_pad_mouse.left_down_toggle = true;
-
+	event.Skip();
 }
 
 void PadViewFrame::OnMouseRight(wxMouseEvent& event)
@@ -222,11 +226,12 @@ void PadViewFrame::OnMouseRight(wxMouseEvent& event)
 	auto& instance = InputManager::instance();
 
 	std::scoped_lock lock(instance.m_pad_mouse.m_mutex);
-	instance.m_pad_mouse.right_down = event.ButtonDown(wxMOUSE_BTN_LEFT);
+	instance.m_pad_mouse.right_down = event.ButtonDown(wxMOUSE_BTN_RIGHT);
 	auto physPos = ToPhys(event.GetPosition());
 	instance.m_pad_mouse.position = { physPos.x, physPos.y };
 	if (event.ButtonDown(wxMOUSE_BTN_RIGHT))
 		instance.m_pad_mouse.right_down_toggle = true;
+	event.Skip();
 }
 
 void PadViewFrame::OnSetWindowTitle(wxCommandEvent& event)

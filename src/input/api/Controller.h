@@ -101,7 +101,7 @@ public:
 	virtual bool has_battery() { return false; }
 	virtual bool has_low_battery() { return false; }
 
-	const ControllerState& calibrate();
+	virtual const ControllerState& calibrate();
 	const ControllerState& update_state();
 	const ControllerState& get_state() const { return m_last_state; }
 	const ControllerState& get_default_state() { return is_calibrated() ? m_default_state : calibrate(); }
@@ -111,7 +111,10 @@ public:
 
 	bool is_calibrated() const { return m_is_calibrated; }
 
-	float get_axis_value(uint64 button) const;
+	// an input's value 0..1 (fork: virtual, the Mouse device's cursor inputs are analogue; its
+	// Cursor X/Y are -1..1) and whether it is pressed (the bindings' "active")
+	virtual float get_axis_value(uint64 button) const;
+	virtual bool is_input_active(uint64 button) const { return m_last_state.buttons.GetButtonState((uint32)button); }
 	virtual bool has_axis() const { return true; }
 
 	bool use_motion() { return has_motion() && m_settings.motion; }

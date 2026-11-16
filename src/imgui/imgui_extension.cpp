@@ -10,6 +10,7 @@
 #include "imgui_impl_vulkan.h"
 #endif
 #include "input/InputManager.h"
+#include "input/MouseState.h"
 
 // <imgui_internal.h>
 template<typename T> static T ImMin(T lhs, T rhs) { return lhs < rhs ? lhs : rhs; }
@@ -144,9 +145,7 @@ void ImGui_UpdateWindowInformation(bool mainWindow)
 	const auto mousePos = instance.get_mouse_position(!mainWindow);
 	io.MousePos = { (float)mousePos.x, (float)mousePos.y };
 
-	bool padDown;
-	const auto pos = instance.get_left_down_mouse_info(&padDown);
-	io.MouseDown[0] = padDown != mainWindow && pos.has_value();
+	io.MouseDown[0] = MouseState::Get().button_down(mainWindow ? MouseState::kMainWindow : MouseState::kPadWindow, MouseInputs::kLeft);
 	auto get_mapping = [&](uint32 key_code)
 	{
 		auto key = keyboard_mapping.find(key_code);
