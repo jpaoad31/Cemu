@@ -64,6 +64,16 @@ FitMeterFrame::FitMeterFrame(wxWindow* parent)
 		brow->Add(reset, 0, wxRIGHT, 6);
 		brow->Add(clear, 0);
 		box->Add(brow, 0, wxALL, 4);
+		auto* prow = new wxBoxSizer(wxHORIZONTAL);
+		prow->Add(new wxStaticText(sb, wxID_ANY, _("Test: pretend the meter was registered")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+		m_pretend = new wxSpinCtrl(sb, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 60, 0);
+		m_pretend->SetToolTip(_("A test option: the meter's data starts this many days before its registration (or its last Clear history), as if it had been worn since. The registration itself is not changed. Wii Fit U credits each day once."));
+		m_pretend->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent&) { FitMeterHost::SetPretendDaysAgo(m_pretend->GetValue()); Refresh(true); });
+		prow->Add(m_pretend, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+		prow->Add(new wxStaticText(sb, wxID_ANY, _("days ago")), 0, wxALIGN_CENTER_VERTICAL);
+		box->Add(prow, 0, wxALL, 4);
+		m_dataStart = new wxStaticText(sb, wxID_ANY, "");
+		box->Add(m_dataStart, 0, wxEXPAND | wxALL, 4);
 		top->Add(box, 0, wxEXPAND | wxALL, 6);
 	}
 
@@ -150,8 +160,8 @@ void FitMeterFrame::Refresh(bool force)
 	m_press->Enable(s.enabled);
 	m_link->SetLabel(wxString::FromUTF8(fmt::format("Link: {} ({} frames in, {} out)", s.link, s.framesIn, s.framesOut)));
 	if (s.registered)
-		m_registration->SetLabel(wxString::FromUTF8(fmt::format("Registered to: {}{}   (meter ID {:08X}, save {:08X}, since {})\nThe meter has data from {} on (a real meter has nothing from before its registration; minutes: the last 7 days)",
-			s.miiName.empty() ? "(no Mii name)" : s.miiName, s.pet ? " (pet)" : "", s.samuId, s.saveDataId, s.registeredAt, s.historyStart)));
+		m_registration->SetLabel(wxString::FromUTF8(fmt::format("Registered to: {}{}   (meter ID {:08X}, save {:08X}, since {})",
+			s.miiName.empty() ? "(no Mii name)" : s.miiName, s.pet ? " (pet)" : "", s.samuId, s.saveDataId, s.registeredAt)));
 	else
 		m_registration->SetLabel(_("Not registered: register it in Wii Fit U (Fit Meter > settings)"));
 	m_clock->SetLabel(wxString::FromUTF8(fmt::format("Meter clock: {:04}-{:02}-{:02} {:02}:{:02}{}", s.clock.year, s.clock.month, s.clock.day,
@@ -159,6 +169,12 @@ void FitMeterFrame::Refresh(bool force)
 	m_lastSync->SetLabel(wxString::FromUTF8(s.lastSync.empty() ? std::string("Last sync: never") :
 		fmt::format("Last sync: {} ({} so far)", s.lastSync, s.syncCount)));
 	m_source->SetSelection(s.useFile ? 1 : 0);
+	if (!m_pretend->HasFocus() || force)
+		m_pretend->SetValue(s.pretendDaysAgo);
+	m_dataStart->SetLabel(wxString::FromUTF8(!s.registered ? std::string("Data start: (not registered)") :
+		fmt::format("Data start: {}{} (per-minute data: the last 7 days at most){}", s.dataStart,
+			s.pretendDaysAgo ? fmt::format(" = history start {} - {} day(s)", s.historyStart, s.pretendDaysAgo) : std::string(),
+			s.pretendDaysAgo ? "\nTest option on: the meter pretends it was worn before its registration." : "")));
 	m_activity->SetLabel(wxString::FromUTF8(fmt::format("Active: {}\n{}\nToday's steps so far: {}", s.source, s.activitySummary,
 		s.stepsToday >= 0 ? std::to_string(s.stepsToday) : std::string("none"))));
 	m_hint->SetLabel(wxString::FromUTF8(s.hint));

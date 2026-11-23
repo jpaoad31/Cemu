@@ -167,7 +167,10 @@ namespace FitMeterHost
 		{
 			const sint64 hm = st.historyStartMinute % FitMeter::MINUTES_PER_DAY;
 			s.historyStart = fmt::format("{} {:02}:{:02}", FitMeter::FormatDate((sint32)(st.historyStartMinute / FitMeter::MINUTES_PER_DAY)), hm / 60, hm % 60);
+			const sint64 ds = m.DataStartMinute();
+			s.dataStart = fmt::format("{} {:02}:{:02}", FitMeter::FormatDate((sint32)(ds / FitMeter::MINUTES_PER_DAY)), (ds % FitMeter::MINUTES_PER_DAY) / 60, ds % 60);
 		}
+		s.pretendDaysAgo = st.pretendDaysAgo;
 		s.lastSync = st.lastSync;
 		s.syncCount = st.syncCount;
 		s.clock = m.Now();
@@ -229,6 +232,18 @@ namespace FitMeterHost
 		std::lock_guard lock(Host().mutex);
 		Meter().PressButton(NowMs());
 		LogLine("Fit Meter: button pressed (UI)");
+	}
+
+	void SetPretendDaysAgo(int days)
+	{
+		std::lock_guard lock(Host().mutex);
+		auto& st = Meter().State();
+		const int d = std::clamp(days, 0, 60);
+		if (d != st.pretendDaysAgo)
+			st.reportClockUnsetOnce = true; // the next sync gets the full 7 days of minutes
+		st.pretendDaysAgo = d;
+		Meter().SaveState();
+		LogLine(fmt::format("Fit Meter: test option: data starts {} day(s) before the registration", Meter().State().pretendDaysAgo));
 	}
 
 	void ClearHistory()

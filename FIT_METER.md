@@ -105,6 +105,15 @@ real per-date step records).
     total counts from that minute (demo).
   - Minutes cover at most 7 days, the real meter's memory: 10080 bytes is the game's maximum ask.
   - **Clear meter history** (the window) moves `history_start` to now and keeps the registration.
+  - **Test option "pretend the meter was registered N days ago"** (the window, `pretend_registered_days_ago`
+    in meter.json, default 0): the data starts at `history_start` − N days. The registration record is not
+    changed. The next sync sends N days of daily totals and up to 7 days of minutes, and the game credits each
+    day once.
+    - Changing it makes the meter report its clock as "not set" once (`report_clock_unset_once`).
+    - The game then resets its transfer date, asks for the full 10080 bytes of minutes (otherwise it asks
+      only for the minutes since the last transfer), and writes the time.
+    - `verify_sync_credits.py ... 2026-11-23T01:45+7` (registered 00:48): one sync credits 51,008 steps,
+      fills 11-16..11-23 with minutes, and a re-sync credits 0.
 - **The per-minute graph** (`AMG_MakeSAMUDataFromSavedata`) shows a minute only when METs, altitude and tag
   are all present in that day's slot. It opens at the transfer time − 2 h.
   - The demo sends all three for every minute it covers.
@@ -245,7 +254,7 @@ Pinned by running the game's decoder. Each stream starts with the newest value.
 **Verified**
 
 - Build: release, macOS bundle.
-- `FitMeterTest.cpp`: 362 checks, 0 failures. It also checks the meter's memory: nothing before registration, the next day's sync, the 7-day minute window, Clear history, and the old-meter.json fallback. Since the demo, it also checks the 28-day mapping across midnight and the wrap, determinism and lining up (yesterday at tomorrow's sync = today complete), partial today, the night-owl totals (a Saturday's 00:00-02:59 walk counts for Friday; at 01:30 the per-day stream's today is Friday so far), kcal, and the steps-today override (only for that day). It contains a C++ model of the game's IRC + IRCU master, written from the asm. It covers:
+- `FitMeterTest.cpp`: 369 checks, 0 failures. It also checks the meter's memory: nothing before registration, the next day's sync, the 7-day minute window, Clear history, and the old-meter.json fallback. Since the demo, it also checks the 28-day mapping across midnight and the wrap, determinism and lining up (yesterday at tomorrow's sync = today complete), partial today, the night-owl totals (a Saturday's 00:00-02:59 walk counts for Friday; at 01:30 the per-day stream's today is Friday so far), kcal, and the steps-today override (only for that day). It contains a C++ model of the game's IRC + IRCU master, written from the asm. It covers:
   - frames, the CRC, the XOR, the rxSize mapping;
   - connect timeout → result 1;
   - registration with chunked 1200-byte writes;

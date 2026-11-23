@@ -4,6 +4,7 @@ over a series of syncs with the virtual meter's demo, through the game's own SAM
 real per-date step records (RPHealthSaveManager OtherMeasureData*, get/setStep).
 
   python3 tools/fitmeter/verify_sync_credits.py --since 2026-11-23T00:48 2026-11-23T00:48 2026-11-23T00:49 ...
+  TIME+N: from this sync on, the test option "pretend registered N days ago" is on.
 """
 import sys, os, subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,13 +25,22 @@ fails = 0
 results = []
 import datetime, struct
 last = None
+pretend = 0
 for when in argv:
+    full = False
+    if '+' in when:
+        when, n = when.split('+')
+        full = int(n) != pretend  # the option changed: the meter says "clock not set" once -> the game asks 10080
+        pretend = int(n)  # the test option from this sync on
     # SAMUReceiveProcessOnStageWait: banks 02-04 are asked for min(10080, minutes since the transfer + 10) bytes
     t = datetime.datetime.fromisoformat(when)
-    size = 10080 if last is None else min(10080, int((t - last).total_seconds() // 60) + 10)
+    size = 10080 if last is None or full else min(10080, int((t - last).total_seconds() // 60) + 10)
     last = t
+    eff = None
+    if since:
+        eff = (datetime.datetime.fromisoformat(since) - datetime.timedelta(days=pretend)).strftime('%Y-%m-%dT%H:%M')
     subprocess.run([os.path.join(ROOT, 'build', 'fitmeter_test'), '--dump', 'demo', when, out, '--minute-bytes', str(size)]
-                   + (['--since', since] if since else []), check=True, stdout=subprocess.DEVNULL)
+                   + (['--since', eff] if eff else []), check=True, stdout=subprocess.DEVNULL)
     streams = {b: open(os.path.join(out, 'b%d.bin' % b), 'rb').read() for b in (2, 3, 4, 5, 6)}
     d, t = when.split('T')
     now = tuple(map(int, d.split('-'))) + tuple(map(int, t.split(':')))
@@ -47,7 +57,7 @@ for when in argv:
             break
         sent += v
     results.append((when, steps, height, sent))
-    print('%s: asked %5d minute bytes; the meter sent %6d steps in bank 06; the game credited %6d steps, height %d' % (when, size, sent, steps, height))
+    print('%s%s: asked %5d minute bytes; the meter sent %6d steps in bank 06; the game credited %6d steps, height %d' % (when, ' (pretend %d days)' % pretend if pretend else '', size, sent, steps, height))
 # what the save holds per day after the last sync: steps, and the minutes with METs > 0 / altitude / a tag
 mem, call, proc = ctx
 for i in sorted(range(50), key=lambda i: -save.date[i]):

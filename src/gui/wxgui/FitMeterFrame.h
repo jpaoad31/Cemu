@@ -33,4 +33,6 @@ private:
 	wxChoice* m_source;
 	wxCheckBox* m_override;
 	wxStaticText* m_hint;
+	wxSpinCtrl* m_pretend;
+	wxStaticText* m_dataStart;
 };

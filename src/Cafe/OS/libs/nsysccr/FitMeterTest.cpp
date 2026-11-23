@@ -687,6 +687,22 @@ static void TestHistory()
 	// it persists
 	VirtualFitMeter again(dir.string());
 	CHECK_EQ(again.State().historyStartMinute, vm.State().historyStartMinute);
+	// the test option: the data starts N days before the history start; the registration stays
+	vm.State().pretendDaysAgo = 7;
+	vm.State().clockSet = true;
+	vm.State().reportClockUnsetOnce = true; // as FitMeterHost::SetPretendDaysAgo does
+	CHECK_EQ(vm.HandleRead(SAMU_READ_TIME, 0)->at(0), 0xFF);
+	vm.HandleWrite(SAMU_WRITE_TIME, 0, {0, 26, 12, 7, 12, 0});
+	CHECK_EQ(vm.HandleRead(SAMU_READ_TIME, 0)->at(0), 0x00);
+	CHECK_EQ(vm.DataStartMinute(), vm.State().historyStartMinute - 7 * 1440);
+	auto [n4, s4] = daySum(*vm.HandleRead(SAMU_READ_STEPS, 120));
+	CHECK_EQ(n4, 8); // 7 days + today
+	CHECK(s4 > 30000);
+	CHECK(vm.State().registered);
+	VirtualFitMeter reread(dir.string());
+	CHECK_EQ(reread.State().pretendDaysAgo, 7);
+	vm.State().pretendDaysAgo = 0;
+	vm.SaveState();
 	// a meter.json from before history_start: the registration time is the start
 	{
 		std::ofstream f(dir / "meter.json");

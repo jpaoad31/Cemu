@@ -185,6 +185,9 @@ namespace FitMeter
 		h("personal", personal);
 		s("mii_name", miiName);
 		s("registered_at", registeredAt);
+		if (doc.HasMember("pretend_registered_days_ago") && doc["pretend_registered_days_ago"].IsInt())
+			pretendDaysAgo = std::clamp(doc["pretend_registered_days_ago"].GetInt(), 0, 60);
+		b("report_clock_unset_once", reportClockUnsetOnce);
 		if (doc.HasMember("history_start") && doc["history_start"].IsString())
 		{
 			int y, mo, d, h, mi;
@@ -250,6 +253,8 @@ namespace FitMeter
 				hs = FormatDate((int32_t)(historyStartMinute / MINUTES_PER_DAY)) + b;
 			}
 			doc.AddMember("history_start", str(hs), al);
+			doc.AddMember("pretend_registered_days_ago", pretendDaysAgo, al);
+			doc.AddMember("report_clock_unset_once", reportClockUnsetOnce, al);
 		}
 		doc.AddMember("last_sync", str(lastSync), al);
 		doc.AddMember("sync_count", syncCount, al);
@@ -309,6 +314,13 @@ namespace FitMeter
 		return (int64_t)t.DayNumber() * MINUTES_PER_DAY + t.hour * 60 + t.minute;
 	}
 
+	int64_t VirtualFitMeter::DataStartMinute() const
+	{
+		if (!m_state.registered || m_state.historyStartMinute == INT64_MIN)
+			return INT64_MIN;
+		return m_state.historyStartMinute - (int64_t)m_state.pretendDaysAgo * MINUTES_PER_DAY;
+	}
+
 	void VirtualFitMeter::ClearHistory()
 	{
 		m_state.historyStartMinute = NowMinute();
@@ -322,7 +334,7 @@ namespace FitMeter
 		ctx.now = Now();
 		ctx.dayStartHour = m_state.DayStartHour();
 		// a meter only has data from after its registration
-		ctx.sinceMinute = m_state.registered ? m_state.historyStartMinute : INT64_MIN;
+		ctx.sinceMinute = DataStartMinute(); // (the test option can move it back)
 		if (m_source)
 			ok = m_source->GetActivity(ctx, act, err);
 		LimitToMeterMemory(act, ctx.sinceMinute, ctx.dayStartHour);
@@ -604,7 +616,10 @@ namespace FitMeter
 		case SAMU_READ_TIME:
 		{
 			const MeterTime t = Now();
-			std::vector<uint8_t> d = {(uint8_t)(m_state.clockSet ? 0x00 : 0xFF), (uint8_t)(t.year - 2000), (uint8_t)t.month,
+			// after the test option changed: "clock not set" once, so the game resets its transfer date, asks for the
+			// full 7 days of minutes (SAMUSeq: lbl_11C3FA24 = 10080) and writes the time
+			const bool unset = !m_state.clockSet || m_state.reportClockUnsetOnce;
+			std::vector<uint8_t> d = {(uint8_t)(unset ? 0xFF : 0x00), (uint8_t)(t.year - 2000), (uint8_t)t.month,
 				(uint8_t)t.day, (uint8_t)t.hour, (uint8_t)t.minute};
 			std::snprintf(b, sizeof(b), "Fit Meter: time -> %04d-%02d-%02d %02d:%02d%s", t.year, t.month, t.day, t.hour, t.minute,
 				m_state.clockSet ? "" : " (clock not set)");
@@ -690,6 +705,7 @@ namespace FitMeter
 				if (m_state.clockOffsetSeconds > -60 && m_state.clockOffsetSeconds < 60)
 					m_state.clockOffsetSeconds = 0;
 				m_state.clockSet = true;
+				m_state.reportClockUnsetOnce = false;
 				std::snprintf(b, sizeof(b), "Fit Meter: clock set to 20%02u-%02u-%02u %02u:%02u (offset %lld s from the host)", data[1], data[2],
 					data[3], data[4], data[5], (long long)m_state.clockOffsetSeconds);
 				Log(b);
