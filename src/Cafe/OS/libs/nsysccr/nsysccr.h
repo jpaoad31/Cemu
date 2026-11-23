@@ -32,7 +32,12 @@ namespace FitMeterHost
 		std::string folder;
 		std::string activityPath;
 		std::string activitySummary; // e.g. "8 days, 3 with per-minute data" or the file's error
-		sint32 stepsToday = -1;
+		std::string source;          // "Built-in demo (4-week cycle)", "File: ...", plus the override
+		std::string hint;            // one line for the window (empty: nothing to say)
+		bool useFile = false;
+		bool override = false;       // today's steps are set by hand
+		sint32 overrideSteps = 0;
+		sint32 stepsToday = -1;      // so far (today only has the minutes up to the meter's clock)
 		std::string lastError;
 	};
 
@@ -42,7 +47,9 @@ namespace FitMeterHost
 	void PressButton();                  // the meter's button: links if the game is waiting (or within 10 s)
 	void Unregister();                   // back to a new, unregistered meter (the game's save keeps its own record)
 	bool ImportActivityFile(const fs::path& source, std::string& error); // copies it to <folder>/activity.json
-	bool SetStepsToday(sint32 steps, std::string& error);
+	bool SetStepsToday(sint32 steps, std::string& error); // overrides today's step count (any source)
+	void ClearStepsToday();
+	void UseDemo(bool demo);             // the built-in demo (default) or the activity file
 	fs::path GetFolder();
 	// the data source seam: replaces the activity file (e.g. a phone sync later); nullptr: the file again
 	void SetDataSource(std::shared_ptr<FitMeter::MeterDataSource> source);

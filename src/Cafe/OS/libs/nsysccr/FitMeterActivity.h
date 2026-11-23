@@ -39,19 +39,27 @@ namespace FitMeter
 		int defaultTag = 0; // tag for minutes that have METs but no tag
 	};
 
-	// the data source seam: the file now, the phone ("meter sync" message) later
+	// the meter's clock reading
+	struct MeterTime
+	{
+		int year = 2000, month = 1, day = 1, hour = 0, minute = 0;
+		int32_t DayNumber() const { return DaysFromCivil(year, month, day); }
+	};
+
+	// the data source seam: the file, the built-in demo, the phone ("meter sync" message) later.
+	// now: the meter's clock; dayStartHour: 3 with the night-owl setting (per-day totals count from it)
 	class MeterDataSource
 	{
 	public:
 		virtual ~MeterDataSource() = default;
-		virtual bool GetActivity(Activity& out, std::string& error) = 0;
+		virtual bool GetActivity(const MeterTime& now, int dayStartHour, Activity& out, std::string& error) = 0;
 		virtual std::string Describe() const = 0;
 	};
 
 	// activity.json:
 	// { "days": [ { "date": "2026-11-21", "steps": 8000, "kcal": 250,
 	//               "segments": [ { "start": "08:00", "minutes": 30, "mets": 3.5, "tag": 2, "climb_m": 12 } ],
-	//               "mets": [ ... per minute ... ], "altitude": [ ... ], "tag": [ ... ] } ],
+	//               "mets": [ ... per minute ... ], "altitude": [ ... ], "climb": [ ... ], "tag": [ ... ] } ],
 	//   "default_tag": 0 }
 	bool ParseActivityJson(const std::string& text, Activity& out, std::string& error);
 	bool LoadActivityFile(const std::string& path, Activity& out, std::string& error);
@@ -62,18 +70,11 @@ namespace FitMeter
 	{
 	public:
 		explicit JsonFileMeterSource(std::string path) : m_path(std::move(path)) {}
-		bool GetActivity(Activity& out, std::string& error) override { return LoadActivityFile(m_path, out, error); }
+		bool GetActivity(const MeterTime&, int, Activity& out, std::string& error) override { return LoadActivityFile(m_path, out, error); }
 		std::string Describe() const override { return m_path; }
 		const std::string& GetPath() const { return m_path; }
 	private:
 		std::string m_path;
-	};
-
-	// the meter's clock reading
-	struct MeterTime
-	{
-		int year = 2000, month = 1, day = 1, hour = 0, minute = 0;
-		int32_t DayNumber() const { return DaysFromCivil(year, month, day); }
 	};
 
 	// banks 05 (kcal, isKcal) / 06 (steps): u16 BE per day, index 0 = the meter's today (the day starts at

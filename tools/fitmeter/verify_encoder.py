@@ -3,22 +3,36 @@
 C++ encoder through the IR link and the IRCU slave, XOR undone) decoded by Wii Fit U's own
 SAMUProcess::SAMUDataSave (decoder_harness.py), compared with what activity.json says.
 
-  python3 tools/fitmeter/verify_encoder.py [activity.json] [YYYY-MM-DDTHH:MM]
+  python3 tools/fitmeter/verify_encoder.py [activity.json|demo] [YYYY-MM-DDTHH:MM] [--night-owl]
+
+"demo" checks the built-in demo source (the reference is the activity_used.json the dump writes).
+--night-owl sets the meter's and the game's day start to 3:00.
 """
-import sys, os, json, subprocess, datetime, math
+import sys, os, json, subprocess, datetime, math, struct
+
+
+def rnd(x):
+    # the encoder's rounding: half away from zero, in float (lroundf)
+    x = struct.unpack('f', struct.pack('f', x))[0]
+    return int(math.floor(abs(x) + 0.5)) * (1 if x >= 0 else -1)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 import decoder_harness as H  # noqa: E402
 
-act_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'sample_activity.json')
-when = sys.argv[2] if len(sys.argv) > 2 else '2026-11-22T14:30'
+args = [a for a in sys.argv[1:] if not a.startswith('--')]
+night_owl = '--night-owl' in sys.argv
+act_path = args[0] if len(args) > 0 else os.path.join(HERE, 'sample_activity.json')
+when = args[1] if len(args) > 1 else '2026-11-22T14:30'
 out = os.path.join(ROOT, 'build', 'fitmeter_dump')
-subprocess.run([os.path.join(ROOT, 'build', 'fitmeter_test'), '--dump', act_path, when, out], check=True)
+subprocess.run([os.path.join(ROOT, 'build', 'fitmeter_test'), '--dump', act_path, when, out] + (['--night-owl'] if night_owl else []),
+               check=True, stdout=subprocess.DEVNULL)
+act_path = os.path.join(out, 'activity_used.json')
 streams = {b: open(os.path.join(out, 'b%d.bin' % b), 'rb').read() for b in (2, 3, 4, 5, 6)}
 d, t = when.split('T')
 now = tuple(map(int, d.split('-'))) + tuple(map(int, t.split(':')))
-save, t32, calls, count, ctx = H.run(streams, now)
+save, t32, calls, count, ctx = H.run(streams, now, night_owl=night_owl)
 mem, call, proc = ctx
 
 def ymd(d16):
@@ -31,6 +45,8 @@ decoded = {ymd(save.date[i]): i for i in range(50) if save.date[i]}
 act = json.load(open(act_path))
 today = datetime.date(*now[:3])
 nowmin = now[3] * 60 + now[4]
+# the per-day banks' today: before 3:00 with night owl it is still yesterday (SaveU16Data_)
+day_today = today - datetime.timedelta(days=1) if night_owl and now[3] < 3 else today
 fails = 0
 checks = 0
 
@@ -42,9 +58,9 @@ def check(cond, msg):
         print('FAIL', msg)
 
 days = {datetime.date.fromisoformat(x['date']): x for x in act['days']}
-oldest_steps = min(days)
+oldest_steps = min(d for d, j in days.items() if 'steps' in j or 'kcal' in j)
 for i in range(60):
-    day = today - datetime.timedelta(days=i)
+    day = day_today - datetime.timedelta(days=i)
     if day < oldest_steps:
         break
     j = days.get(day, {})
@@ -73,6 +89,7 @@ def minute_arrays(j):
             if 'climb_m' in s: climb[k] += s['climb_m'] / n
     for k, v in enumerate(j.get('mets', [])): mets[k] = v
     for k, v in enumerate(j.get('altitude', [])): alt[k] = v
+    for k, v in enumerate(j.get('climb', [])): climb[k] += v or 0.0
     for k, v in enumerate(j.get('tag', [])): tag[k] = v
     return mets, tag, climb, alt
 
@@ -87,6 +104,20 @@ def first_minute(pred):
 # the three per-minute streams start together, at the first minute with any per-minute value
 first_mets = first_tag = first_alt = first_minute(
     lambda a, k: a[0][k] is not None or a[1][k] is not None or a[3][k] is not None or a[2][k] != 0)
+# the game asks 10080 bytes: older minutes may not fit. The stream's own length says where it starts.
+b2 = streams[2]
+covered, i = 0, 0
+while i < len(b2) and b2[i] != 0xFF:
+    if i + 1 < len(b2) and b2[i + 1] == 0:
+        covered += b2[i]; i += 2
+    else:
+        covered += 1; i += 1
+if covered:
+    start_abs = datetime.datetime(*now) - datetime.timedelta(minutes=covered - 1)
+    cov = (start_abs.date(), start_abs.hour * 60 + start_abs.minute)
+    if first_mets is None or cov > first_mets:
+        first_mets = first_tag = first_alt = cov
+print('per-minute streams cover %d minutes from %s %02d:%02d' % (covered, first_mets[0], first_mets[1] // 60, first_mets[1] % 60) if covered else 'no per-minute data')
 checked_minutes = 0
 level = 0.0         # the expected altitude relative to the stream's first minute
 got_level = 0       # the decoded one (sum of the per-minute changes)
@@ -95,12 +126,16 @@ for day in sorted(days):
     if day > today:
         continue
     slot = decoded.get(day)
+    if slot is None:
+        # the save has 50 day slots: an older day can be pushed out
+        check(day < min(day_today, today) - datetime.timedelta(days=48), '%s: no slot' % day)
+        continue
     mets, tag, climb, alt = minute_arrays(days[day])
     last = nowmin if day == today else 1439
     for k in range(last + 1):
         at = (day, k)
         if first_mets and at >= first_mets:
-            wm = 0 if mets[k] is None else max(0, min(249, round(mets[k] * 10)))
+            wm = 0 if mets[k] is None else max(0, min(249, rnd(struct.unpack('f', struct.pack('f', mets[k]))[0] * 10)))
             check(slot is not None and save.mets[slot][k] == wm, '%s %02d:%02d METs %s want %d' % (day, k // 60, k % 60, save.mets[slot][k] if slot is not None else None, wm))
         elif slot is not None:
             check(save.mets[slot][k] == 0xFF, '%s %02d:%02d METs before the data %d' % (day, k // 60, k % 60, save.mets[slot][k]))

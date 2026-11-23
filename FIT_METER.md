@@ -11,8 +11,9 @@ port. A virtual meter sits on the other end of the link.
    - a **Press meter button** button;
    - registration status: Mii name, meter ID, date registered;
    - the meter clock and the last sync;
-   - **Steps today** (Set writes it into activity.json);
-   - **Load activity.json...**, **Open folder** and **Reset meter (unregister)**.
+   - the data **Source**: the **built-in demo (4-week cycle)**, the default, or the activity.json file;
+   - **Set today's steps** (overrides today's count from either source);
+   - **Load activity.json...** (switches to the file), **Open folder** and **Reset meter (unregister)**.
 2. In Wii Fit U, register the meter as you would a real one (the Fit Meter settings).
    - The game asks you to point the meter at the GamePad and press its button.
    - With auto press on, the meter connects about 1.5 s after the game starts waiting.
@@ -25,7 +26,7 @@ The meter folder is `<Cemu user data>/fitmeter/` (`~/Library/Application Support
 
 | file | what |
 |---|---|
-| `meter.json` | Settings (`enabled`, `auto_press`, `auto_press_delay_ms`, `activity_file`). Registration: `registered`, `save_data_id`, `samu_id`, `ident_flag`, `mii_name`, `mii_info` (hex), `personal` (hex). Clock: `clock_set`, `clock_offset_s`. Bookkeeping: `registered_at`, `last_sync`, `sync_count`, and the list of blobs. |
+| `meter.json` | Settings (`enabled`, `auto_press`, `auto_press_delay_ms`, `activity_file`, `source` = `demo`/`file`, `steps_override_day` + `steps_override`). Registration: `registered`, `save_data_id`, `samu_id`, `ident_flag`, `mii_name`, `mii_info` (hex), `personal` (hex). Clock: `clock_set`, `clock_offset_s`. Bookkeeping: `registered_at`, `last_sync`, `sync_count`, and the list of blobs. |
 | `blobs/<cmd>_<arg>.bin` | What registration wrote. `82_xx` are the LCD texts, images and sounds; `83_00..07` are the Mii icons; `86..8B` are debug writes. |
 | `activity.json` | The data the meter "measured" (below). |
 
@@ -54,6 +55,39 @@ the transfer date. Back up `mlc01/usr/save/00050000/10102300` (Wii Fit U USA) be
   - Without per-minute data the meter sends "no data" for banks 02-04. The game then keeps those minutes empty.
 - `tools/fitmeter/sample_activity.json` is an example.
 
+### The built-in demo (the default source)
+
+`FitMeterDemo.cpp`: a fixed, made-up 4-week template, so a sync always sends something.
+
+- **Mapping:** calendar day d plays template day `(d - 2024-01-01) mod 28`. Template 0 is a Monday.
+  Consecutive dates are consecutive template days, also across the wrap, so tomorrow's sync shows today's
+  data again as "yesterday" and nothing jumps between syncs.
+- **Today is partial:** only the minutes up to the meter's clock count, so the steps grow during the day.
+- **Deterministic:** the template is built in code from fixed tables and a fixed hash; no run-time randomness.
+- **The days:**
+  - Weekdays (5,600-11,000 steps): a commute walk with 4th-floor stairs (+12 m and back down), office
+    bouts, lunch walks (a long brisk one on Wednesdays), a gym session Mon/Thu, a hilly run on two Tuesdays.
+  - Fridays in weeks 1 and 3: an evening out, then **a walk home between 00:25 and 01:20 on Saturday**.
+    Week 2 has a late walk home on **Sunday 00:40-01:45**.
+  - Saturdays: errands (week 1), hikes with real climbing (+440/-440 m in week 2, 21,600 steps;
+    +370/-370 m in week 4), a quiet day after the night out (week 3).
+  - Sundays: a long hill run, a park walk, a lazy day (724 steps), a walk with castle stairs (+30 m).
+- **Values:** METs per kind (walk 3.5, brisk 4.3, stairs 8, run 9.8, gym 5.5, hike up 6.8 / down 4.6, office
+  1.8) with ±6% minute-to-minute variation; steps per minute to match (walk 105, run 165, gym 14...); kcal
+  = Σ (METs − 1) × 1.05 per minute (~60 kg); not moving = METs 0.
+- **Tags (guesses; the meanings are unknown):** 0 light, 2 walk, 3 brisk/stairs, 12 hike, 14 run, 23 gym.
+
+### Night owl
+
+Checked in the game's decoder (the harness sets `RPHealthParameter+0x5CC5B`, `mDayStartMode`):
+- The **per-day banks** (05/06) are attributed from the game's "today", which with night owl is the
+  **previous** calendar day before 3:00 (`SaveU16Data_`).
+- The **per-minute banks** (02-04) always land on **calendar** days (`SaveU8Data_` has no such check).
+
+So the meter totals steps and kcal per day from 3:00 to 3:00 when the personal data's day-change byte is set
+(00:00-02:59 counts for the day before), and keeps the minutes on calendar time. The demo's walks home
+after midnight exercise this.
+
 ## How it works
 
 ```
@@ -62,7 +96,7 @@ game IRC lib --CCRCDCPerIrdaControl / VPADBASEGetIRCStatus--> DrcIrLink (the Gam
                                                                   v
                                                      IrPeer: VirtualFitMeter (IRCU slave + SAMU + store)
                                                                   |
-                                                     MeterDataSource: JsonFileMeterSource (activity.json)
+                                                     MeterDataSource: DemoMeterSource (default) | JsonFileMeterSource (activity.json)
                                                                   |  (phase b: the iPhone Remote GamePad app)
 ```
 
@@ -71,7 +105,8 @@ game IRC lib --CCRCDCPerIrdaControl / VPADBASEGetIRCStatus--> DrcIrLink (the Gam
 | `nsysccr.cpp` | The HLE modules: `nsysccr.CCRCDCPerIrdaControl`, plus `vpadbase.VPADBASEIsInit` (returns 1, so IRCInit initialises), `VPADBASEGetIRCStatus` and `VPADBASEClearIRCEvent`. Also `FitMeterHost`, the thread-safe API the UI uses. |
 | `DrcIrLink.*` | The GamePad's IR engine (below). |
 | `VirtualFitMeter.*` | The meter. |
-| `FitMeterActivity.*` | The dates, the JSON source, `SetDayStepsInFile`, and the encoder. |
+| `FitMeterActivity.*` | The dates, the data source interface (it gets the meter's time and day start), the JSON source, and the encoder. |
+| `FitMeterDemo.*` | The built-in demo source and its 4-week template; `ActivityToJson` for the tools. |
 | `FitMeterProtocol.*` | CRC-8, frame build/parse, XOR, the log descriptions. |
 | `FitMeterTest.cpp` | The standalone tests (see Verification). |
 
@@ -177,7 +212,7 @@ Pinned by running the game's decoder. Each stream starts with the newest value.
 **Verified**
 
 - Build: release, macOS bundle.
-- `FitMeterTest.cpp`: 234 checks, 0 failures. It contains a C++ model of the game's IRC + IRCU master, written from the asm. It covers:
+- `FitMeterTest.cpp`: 346 checks, 0 failures. Since the demo, it also checks the 28-day mapping across midnight and the wrap, determinism and lining up (yesterday at tomorrow's sync = today complete), partial today, the night-owl totals (a Saturday's 00:00-02:59 walk counts for Friday; at 01:30 the per-day stream's today is Friday so far), kcal, and the steps-today override (only for that day). It contains a C++ model of the game's IRC + IRCU master, written from the asm. It covers:
   - frames, the CRC, the XOR, the rxSize mapping;
   - connect timeout → result 1;
   - registration with chunked 1200-byte writes;
@@ -186,10 +221,15 @@ Pinned by running the game's decoder. Each stream starts with the newest value.
   - a full sync of banks 02-06;
   - `F5` resend, the manual button, the game's initialize;
   - the encoder (caps, night owl, run lengths, altitude spill, no token split by the size limit).
-- `tools/fitmeter/verify_encoder.py` passes: 26,673 checks, 0 failures, at 14:30 and at 01:15. It works like this:
+- `tools/fitmeter/verify_encoder.py` passes with 0 mismatches. On the sample file: 26,674 checks. On the
+  demo (`verify_encoder.py demo <time> [--night-owl]`), ~283,000 checks per run (71,000 minutes over 50
+  days), at 2026-11-23 14:30, 2026-11-30 09:05 (the 28-day wrap), 2026-12-28 23:50, and with night owl at
+  2026-11-21 01:15 (during a walk home), 2026-11-22 02:30 and 2026-12-27 00:05. It works like this:
   - It dumps the streams through the whole link (`fitmeter_test --dump`).
   - `decoder_harness.py` runs Wii Fit U's own `SAMUProcess::SAMUDataSave` from `step.elf` in the decomp's PowerPC interpreter. The save accessors are replaced by a model of `RPStepSAMUData`.
-  - It compares steps, kcal, METs, tag and altitude for every minute with activity.json.
+  - It compares steps, kcal, METs, tag and altitude for every minute with the source's data (the dump writes it as `activity_used.json`).
+  - The harness implements coreinit's `OSCalendarTimeToTicks` / `OSTicksToCalendarTime` (with the OS's
+    normalisation of out-of-range fields): the game's calendar code needs them at month edges.
 - A scratch run, with a portable folder built from copies, booted Wii Fit U with the new modules loaded. `vpadbase` / `nsysccr` no longer show as unsupported calls.
 
 **Inferred** (from the asm, not seen against a real GamePad or meter)
@@ -201,12 +241,13 @@ Pinned by running the game's decoder. Each stream starts with the newest value.
 - That `0xF0` unregisters.
 - The METs scale (×10).
 - The tag meanings.
-- The kcal estimate.
+- The kcal estimate, and the demo's METs/steps/kcal model.
 
-**Not yet seen:** the in-game registration/sync screens in a scratch run. This session had no screen-capture or input permission to navigate the game's menus, so no IR frames were logged in a run. That is the user's test.
+**Seen in the game (the user's test):** registration and sync work with the retail game. That first sync
+had no activity.json, so it sent zeros; the demo is now the default.
 
 ## Phase (b): the phone as the data source
 
-`MeterDataSource` (`FitMeterActivity.h`) is the seam. A `PhoneMeterSource` would cache the Remote GamePad
+`MeterDataSource` (`FitMeterActivity.h`) is the seam (the demo is one implementation). A `PhoneMeterSource` would cache the Remote GamePad
 app's "meter sync" upload as an `Activity`, and `FitMeterHost::SetDataSource()` would install it
 (`nullptr` goes back to the file). The protocol sketch is in the research doc §4.2 (`0x40-0x42`).

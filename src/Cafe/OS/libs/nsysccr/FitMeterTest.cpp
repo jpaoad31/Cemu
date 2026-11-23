@@ -4,14 +4,16 @@
 //
 //   P=build/vcpkg_installed/arm64-osx; D=src/Cafe/OS/libs/nsysccr
 //   clang++ -std=c++20 -Wall -I $P/include $D/FitMeterTest.cpp $D/FitMeterProtocol.cpp $D/DrcIrLink.cpp \
-//     $D/VirtualFitMeter.cpp $D/FitMeterActivity.cpp -o build/fitmeter_test && build/fitmeter_test
+//     $D/VirtualFitMeter.cpp $D/FitMeterActivity.cpp $D/FitMeterDemo.cpp -o build/fitmeter_test && build/fitmeter_test
 //
 // Dump mode (for tools/fitmeter/decoder_harness.py, which runs the game's own decoder on the streams):
-//   build/fitmeter_test --dump activity.json 2026-11-22T14:30 outdir/
-// writes outdir/b2.bin .. b6.bin: what the meter sends for banks 02..06 (XOR undone), through the whole link.
+//   build/fitmeter_test --dump activity.json|demo 2026-11-22T14:30 outdir/ [--night-owl]
+// writes outdir/b2.bin .. b6.bin: what the meter sends for banks 02..06 (XOR undone), through the whole link,
+// and outdir/activity_used.json: the source's data the streams were made from.
 
 #include "DrcIrLink.h"
 #include "FitMeterActivity.h"
+#include "FitMeterDemo.h"
 #include "FitMeterProtocol.h"
 #include "VirtualFitMeter.h"
 
@@ -427,6 +429,9 @@ static void TestLinkAndMeter(const fs::path& dir)
 			"segments": [ { "start": "15:00", "minutes": 10, "mets": 4.0, "tag": 3, "climb_m": 20 } ] },
 			{ "date": "2026-11-21", "steps": 10000 } ] })";
 	}
+	CHECK(meter->State().source == "demo"); // the default
+	meter->State().source = "file";
+	meter->UseSourceFromState();
 	wall += 3600; // an hour later: meter 16:45, console 16:45
 	CHECK(c.ConnectRetry());
 	CHECK(c.MasterReceive(SAMU_READ_IDENT, 0, 9, r));
@@ -486,7 +491,126 @@ static void TestLinkAndMeter(const fs::path& dir)
 	CHECK(sawFrame);
 }
 
-static int Dump(const char* activityPath, const char* when, const char* outDir)
+
+static int32_t DayWithTemplate(int t)
+{
+	int32_t d = DaysFromCivil(2026, 11, 1);
+	while (DemoTemplateIndex(d) != t)
+		d++;
+	return d;
+}
+
+static MeterTime TimeOf(int32_t day, int h, int m)
+{
+	MeterTime t;
+	CivilFromDays(day, t.year, t.month, t.day);
+	t.hour = h;
+	t.minute = m;
+	return t;
+}
+
+static void TestDemo()
+{
+	// consecutive dates are consecutive template days, across the 28-day wrap; template 0 is a Monday
+	const int32_t start = DaysFromCivil(2026, 10, 1);
+	for (int32_t d = start; d < start + 70; d++)
+		CHECK_EQ(DemoTemplateIndex(d + 1), (DemoTemplateIndex(d) + 1) % DEMO_CYCLE_DAYS);
+	CHECK_EQ(DemoTemplateIndex(DaysFromCivil(2024, 1, 1)), 0);
+	CHECK_EQ(DemoTemplateIndex(DaysFromCivil(2026, 11, 23)) % 7, 0); // 2026-11-23 is a Monday
+
+	DemoMeterSource src;
+	std::string err;
+	auto steps = [&](const MeterTime& now, int dayStart, int32_t day) {
+		Activity a;
+		src.GetActivity(now, dayStart, a, err);
+		auto it = a.days.find(day);
+		return it == a.days.end() ? -2 : it->second.steps;
+	};
+	// the shape: weekdays, a hike, a lazy day, a run day
+	int32_t mon = DayWithTemplate(0);
+	for (int t = 0; t < DEMO_CYCLE_DAYS; t++)
+	{
+		const int32_t d = mon + t;
+		const int st = steps(TimeOf(d + 1, 12, 0), 0, d);
+		if (t % 7 < 5)
+			CHECK(st >= 5000 && st <= 14000);
+		std::printf("  demo template %2d (%s): %5d steps\n", t, FormatDate(d).c_str(), st);
+	}
+	CHECK(steps(TimeOf(mon + 13, 12, 0), 0, mon + 12) > 15000); // week 2 Saturday: the hike
+	CHECK(steps(TimeOf(mon + 21, 12, 0), 0, mon + 20) < 3000);  // week 3 Sunday: lazy
+	// deterministic and lined up: yesterday at a sync tomorrow = today complete at 23:59
+	const int32_t d = DayWithTemplate(27); // the wrap: template 27 -> 0
+	CHECK_EQ(steps(TimeOf(d, 23, 59), 0, d), steps(TimeOf(d + 1, 10, 0), 0, d));
+	CHECK_EQ(steps(TimeOf(d + 1, 10, 0), 0, d), steps(TimeOf(d + 1, 10, 0), 0, d));
+	Activity a1, a2;
+	src.GetActivity(TimeOf(d + 1, 10, 0), 0, a1, err);
+	src.GetActivity(TimeOf(d + 5, 9, 30), 0, a2, err);
+	CHECK(a1.days.at(d).mets.size() == 1440 && a2.days.at(d).mets.size() == 1440);
+	bool same = true;
+	for (int m = 0; m < 1440; m++)
+		same = same && a1.days.at(d).mets[m] == a2.days.at(d).mets[m] && a1.days.at(d).tag[m] == a2.days.at(d).tag[m];
+	CHECK(same);
+	// partial today: grows during the day; minutes after now have no value
+	const int32_t wd = DayWithTemplate(2);
+	const int s0730 = steps(TimeOf(wd, 7, 30), 0, wd), s0800 = steps(TimeOf(wd, 8, 0), 0, wd), s2359 = steps(TimeOf(wd, 23, 59), 0, wd);
+	CHECK(s0730 < s0800 && s0800 < s2359);
+	Activity p;
+	src.GetActivity(TimeOf(wd, 8, 0), 0, p, err);
+	CHECK(!std::isnan(p.days.at(wd).mets[480]) && std::isnan(p.days.at(wd).mets[481]));
+	CHECK(p.days.find(wd + 1) == p.days.end());
+	// night owl: a Saturday with a walk home at 00:25 (template 5): its 00:00-02:59 steps count for Friday
+	const int32_t sat = DayWithTemplate(5), fri = sat - 1;
+	int early = 0, earlyFri = 0;
+	for (int m = 0; m < 180; m++)
+	{
+		early += DemoTemplateDay(5).at(m).steps;
+		earlyFri += DemoTemplateDay(4).at(m).steps;
+	}
+	CHECK(early > 3000);
+	const MeterTime later = TimeOf(sat + 1, 12, 0);
+	CHECK_EQ(steps(later, 3, fri), steps(later, 0, fri) + early - earlyFri);
+	CHECK_EQ(steps(later, 3, sat), steps(later, 0, sat) - early + DemoTemplateDay(6).at(30).steps * 0); // Sunday 00:00-03:00 empty in week 1
+	// at 01:30 on Saturday with night owl, the per-day stream's "today" is Friday, including the walk so far
+	Activity n;
+	const MeterTime t0130 = TimeOf(sat, 1, 30);
+	src.GetActivity(t0130, 3, n, err);
+	auto day = EncodeDayStream(n, t0130, 3, false, 120);
+	int friSoFar = 0;
+	for (int m = 180; m < 1440; m++)
+		friSoFar += DemoTemplateDay(4).at(m).steps;
+	for (int m = 0; m <= 90; m++)
+		friSoFar += DemoTemplateDay(5).at(m).steps;
+	CHECK_EQ((day[0] << 8) | day[1], friSoFar);
+	CHECK_EQ(n.days.at(sat).steps, -1); // the calendar day only carries minutes
+	// kcal follows the METs
+	Activity k;
+	src.GetActivity(TimeOf(mon + 2, 12, 0), 0, k, err);
+	CHECK(k.days.at(mon + 1).kcal > 150 && k.days.at(mon + 1).kcal < 900);
+	// the steps-today override (any source) lives in the meter
+	const fs::path dir = fs::temp_directory_path() / "fitmeter_demo_test";
+	fs::remove_all(dir);
+	int64_t wall = 0;
+	{
+		std::tm tm{};
+		tm.tm_year = 2026 - 1900; tm.tm_mon = 10; tm.tm_mday = 23; tm.tm_hour = 9; tm.tm_min = 0; tm.tm_isdst = -1;
+		wall = (int64_t)std::mktime(&tm);
+	}
+	VirtualFitMeter vm(dir.string());
+	vm.SetWallClock([&] { return wall; });
+	CHECK(vm.GetDataSource()->Describe() == "Built-in demo (4-week cycle)");
+	Activity o;
+	vm.GetActivity(o, err);
+	CHECK(o.days.at(vm.LogicalToday()).steps > 0);
+	vm.State().stepsOverrideDay = vm.LogicalToday();
+	vm.State().stepsOverride = 12345;
+	vm.GetActivity(o, err);
+	CHECK_EQ(o.days.at(vm.LogicalToday()).steps, 12345);
+	wall += 86400; // tomorrow the override no longer applies
+	vm.GetActivity(o, err);
+	CHECK(o.days.at(vm.LogicalToday() - 1).steps != 12345);
+}
+
+static int Dump(const char* activityPath, const char* when, const char* outDir, bool nightOwl)
 {
 	int y, mo, d, h, mi;
 	if (std::sscanf(when, "%d-%d-%dT%d:%d", &y, &mo, &d, &h, &mi) != 5)
@@ -502,7 +626,18 @@ static int Dump(const char* activityPath, const char* when, const char* outDir)
 	uint64_t now = 0;
 	VirtualFitMeter meter(tmp.string());
 	meter.SetWallClock([&] { return wall; });
-	meter.SetDataSource(std::make_shared<JsonFileMeterSource>(activityPath));
+	if (std::strcmp(activityPath, "demo") != 0)
+		meter.SetDataSource(std::make_shared<JsonFileMeterSource>(activityPath));
+	if (nightOwl)
+		meter.State().personal = {40, 1, 44, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 200};
+	{
+		// what the source gave, as activity.json (the verifier's reference)
+		Activity act;
+		std::string err;
+		meter.GetActivity(act, err);
+		std::ofstream f(fs::path(outDir) / "activity_used.json");
+		f << ActivityToJson(act);
+	}
 	meter.State().registered = true;
 	meter.State().clockSet = true;
 	meter.State().autoPressDelayMs = 0;
@@ -533,12 +668,13 @@ static int Dump(const char* activityPath, const char* when, const char* outDir)
 
 int main(int argc, char** argv)
 {
-	if (argc == 5 && std::strcmp(argv[1], "--dump") == 0)
-		return Dump(argv[2], argv[3], argv[4]);
+	if ((argc == 5 || argc == 6) && std::strcmp(argv[1], "--dump") == 0)
+		return Dump(argv[2], argv[3], argv[4], argc == 6 && std::strcmp(argv[5], "--night-owl") == 0);
 	setenv("TZ", "UTC", 1);
 	tzset();
 	TestFrames();
 	TestEncoder();
+	TestDemo();
 	TestLinkAndMeter(fs::temp_directory_path() / "fitmeter_test");
 	std::printf("%d checks, %d failures\n", g_checks, g_failures);
 	return g_failures ? 1 : 0;

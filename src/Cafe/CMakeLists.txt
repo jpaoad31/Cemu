@@ -377,6 +377,8 @@ add_library(CemuCafe
   OS/libs/nsysccr/DrcIrLink.h
   OS/libs/nsysccr/FitMeterActivity.cpp
   OS/libs/nsysccr/FitMeterActivity.h
+  OS/libs/nsysccr/FitMeterDemo.cpp
+  OS/libs/nsysccr/FitMeterDemo.h
   OS/libs/nsysccr/FitMeterProtocol.cpp
   OS/libs/nsysccr/FitMeterProtocol.h
   OS/libs/nsysccr/nsysccr.cpp

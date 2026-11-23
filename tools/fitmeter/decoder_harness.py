@@ -10,7 +10,7 @@ Usage:
   decoder_harness.py --now 2026-11-22T14:30 [--b2 f] [--b3 f] [--b4 f] [--b5 f] [--b6 f] [--json out.json]
 Each --bN is a raw stream file (the meter's bytes, un-XORed).
 """
-import sys, os, struct, json, argparse
+import sys, os, struct, json, argparse, datetime
 
 DECOMP = os.path.expanduser(os.environ.get('WFU_DECOMP', '~/github/jpaoad31/wii-fit-u'))
 sys.path.insert(0, DECOMP + '/tools/emu')
@@ -19,6 +19,7 @@ import ppc, rpxelf  # noqa: E402
 from ppc import M32  # noqa: E402
 
 ELF = DECOMP + '/build/rpx81/step.elf'
+TIMER = 248625000 // 4  # the Wii U's OS timer (ticks per second)
 IMPORT_BASE = {'.fimport_coreinit': 0x2b58000}  # the bl targets in the original text (step.dis)
 
 SAVEMGR_PTR = 0x1014DB50       # RPHealthSaveManager::sInstance (lbl -9392(4117<<16))
@@ -46,7 +47,7 @@ def s16(v):
     return v - 0x10000 if v & 0x8000 else v
 
 
-def run(streams, now, save=None, trace=False):
+def run(streams, now, save=None, trace=False, night_owl=False):
     save = save or SamuSave()
     e = rpxelf.Elf(ELF)
     S = {}
@@ -142,6 +143,27 @@ def run(streams, now, save=None, trace=False):
                 if n:
                     mem.write(d, bytes([v & 0xFF]) * n)
                 return c.lr
+            if nm == 'OSCalendarTimeToTicks':
+                # OSCalendarTime: sec, min, hour, mday, mon (0-11), year, wday, yday, msec, usec (s32 each)
+                a = c.r[3]
+                f_ = [struct.unpack('>i', mem.read(a + 4 * k, 4))[0] for k in range(10)]
+                y_, mo_ = f_[5] + f_[4] // 12, f_[4] % 12  # the OS normalises out-of-range fields
+                dt = datetime.datetime(y_, mo_ + 1, 1) + datetime.timedelta(days=f_[3] - 1, hours=f_[2], minutes=f_[1], seconds=f_[0])
+                t = int((dt - datetime.datetime(2000, 1, 1)).total_seconds()) * TIMER + (f_[8] * TIMER) // 1000
+                c.r[3] = (t >> 32) & M32
+                c.r[4] = t & M32
+                return c.lr
+            if nm == 'OSTicksToCalendarTime':
+                t = (c.r[3] << 32) | c.r[4]
+                if t & (1 << 63):
+                    t -= 1 << 64
+                secs, rem = divmod(t, TIMER)
+                dt = datetime.datetime(2000, 1, 1) + datetime.timedelta(seconds=secs)
+                vals = [dt.second, dt.minute, dt.hour, dt.day, dt.month - 1, dt.year, (dt.weekday() + 1) % 7,
+                        dt.timetuple().tm_yday - 1, rem * 1000 // TIMER, 0]
+                for k, v in enumerate(vals):
+                    mem.write(c.r[5] + 4 * k, struct.pack('>i', v))
+                return c.lr
             c.r[3] = 0
             return c.lr
         return f
@@ -174,6 +196,8 @@ def run(streams, now, save=None, trace=False):
     param = bump(0x80000)
     mem.w32(SAVEMGR_PTR, savemgr)
     mem.w32(PARAM_PTR, param)
+    if night_owl:
+        mem.w8(param + 0x5CC5B, 1)  # RPHealthParameter mDayStartMode (SaveU16Data_: day starts at 3:00)
     y, mo, d, h, mi = now
     t32 = call('getCalendarTime32__13RPSysCalendarSFUiN41', y, mo, d, h, mi)
     proc = bump(0x2000)

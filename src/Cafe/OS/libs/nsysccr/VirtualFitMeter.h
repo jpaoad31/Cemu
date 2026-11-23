@@ -6,6 +6,7 @@
 
 #include "DrcIrLink.h"
 #include "FitMeterActivity.h"
+#include "FitMeterDemo.h"
 
 #include <cstdint>
 #include <deque>
@@ -25,6 +26,9 @@ namespace FitMeter
 		bool autoPress = true;        // "press the meter's button" whenever the game starts a connection
 		int autoPressDelayMs = 1500;  // as if the player pointed the meter at the GamePad
 		std::string activityFile = "activity.json"; // relative to the folder, or absolute
+		std::string source = "demo";  // "demo" (the built-in 4-week cycle) or "file" (activityFile)
+		int32_t stepsOverrideDay = -1; // the UI's "steps today": replaces that day's step count (any source)
+		int32_t stepsOverride = 0;
 		// registration (SAMU 0x80)
 		bool registered = false;
 		uint32_t saveDataId = 0xFFFFFFFF;
@@ -63,6 +67,10 @@ namespace FitMeter
 		void SetLogger(std::function<void(const std::string&)> log) { m_log = std::move(log); }
 		void SetWallClock(WallClock clock) { m_wallClock = std::move(clock); }
 		void SetDataSource(std::shared_ptr<MeterDataSource> source) { m_source = std::move(source); }
+		void UseSourceFromState(); // the demo or the file, as m_state.source says
+		// the data the meter sends now: the source's, plus the steps-today override
+		bool GetActivity(Activity& out, std::string& error);
+		int32_t LogicalToday() const; // today by the meter's clock and day start (night owl: before 3:00 = yesterday)
 		std::shared_ptr<MeterDataSource> GetDataSource() const { return m_source; }
 
 		MeterState& State() { return m_state; }

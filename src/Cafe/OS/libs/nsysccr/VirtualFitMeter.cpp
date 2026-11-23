@@ -161,6 +161,17 @@ namespace FitMeter
 		if (doc.HasMember("auto_press_delay_ms") && doc["auto_press_delay_ms"].IsInt())
 			autoPressDelayMs = std::clamp(doc["auto_press_delay_ms"].GetInt(), 0, 30000);
 		s("activity_file", activityFile);
+		s("source", source);
+		if (source != "file")
+			source = "demo";
+		if (doc.HasMember("steps_override_day") && doc["steps_override_day"].IsString())
+		{
+			int32_t dn;
+			if (ParseDate(doc["steps_override_day"].GetString(), dn))
+				stepsOverrideDay = dn;
+		}
+		if (doc.HasMember("steps_override") && doc["steps_override"].IsInt())
+			stepsOverride = doc["steps_override"].GetInt();
 		b("registered", registered);
 		u("save_data_id", saveDataId);
 		u("samu_id", samuId);
@@ -203,6 +214,9 @@ namespace FitMeter
 		doc.AddMember("auto_press", autoPress, al);
 		doc.AddMember("auto_press_delay_ms", autoPressDelayMs, al);
 		doc.AddMember("activity_file", str(activityFile), al);
+		doc.AddMember("source", str(source), al);
+		doc.AddMember("steps_override_day", str(stepsOverrideDay >= 0 ? FormatDate(stepsOverrideDay) : std::string()), al);
+		doc.AddMember("steps_override", stepsOverride, al);
 		doc.AddMember("registered", registered, al);
 		doc.AddMember("save_data_id", saveDataId, al);
 		doc.AddMember("samu_id", samuId, al);
@@ -248,7 +262,37 @@ namespace FitMeter
 		std::string err;
 		if (!m_state.Load(m_dir, err))
 			m_lastError = err;
-		m_source = std::make_shared<JsonFileMeterSource>(ActivityPath());
+		UseSourceFromState();
+	}
+
+	void VirtualFitMeter::UseSourceFromState()
+	{
+		if (m_state.source == "file")
+			m_source = std::make_shared<JsonFileMeterSource>(ActivityPath());
+		else
+			m_source = std::make_shared<DemoMeterSource>();
+	}
+
+	int32_t VirtualFitMeter::LogicalToday() const
+	{
+		const MeterTime t = Now();
+		return t.DayNumber() - (t.hour < m_state.DayStartHour() ? 1 : 0);
+	}
+
+	bool VirtualFitMeter::GetActivity(Activity& act, std::string& err)
+	{
+		bool ok = true;
+		if (m_source)
+			ok = m_source->GetActivity(Now(), m_state.DayStartHour(), act, err);
+		if (m_state.stepsOverrideDay >= 0 && m_state.stepsOverrideDay == LogicalToday())
+		{
+			DayActivity& d = act.days[m_state.stepsOverrideDay];
+			d.day = m_state.stepsOverrideDay;
+			if (d.steps != m_state.stepsOverride)
+				d.kcal = -1; // estimated from the steps
+			d.steps = m_state.stepsOverride;
+		}
+		return ok;
 	}
 
 	std::string VirtualFitMeter::ActivityPath() const
@@ -532,7 +576,7 @@ namespace FitMeter
 		{
 			Activity act;
 			std::string err;
-			if (m_source && !m_source->GetActivity(act, err))
+			if (!GetActivity(act, err))
 			{
 				m_lastError = err;
 				Log("Fit Meter: " + err + " (sending no data)");

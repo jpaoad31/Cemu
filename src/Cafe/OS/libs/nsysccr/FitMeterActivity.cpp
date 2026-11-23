@@ -145,12 +145,13 @@ namespace FitMeter
 					error = std::string("\"") + name + "\" must be an array of up to 1440 per-minute values";
 					return false;
 				}
-				EnsureSize(v, nan);
+				const float none = (&v == &day.climb) ? 0.0f : nan;
+				EnsureSize(v, none);
 				for (unsigned i = 0; i < a.Size(); i++)
-					v[i] = a[i].IsNumber() ? (float)a[i].GetDouble() : nan;
+					v[i] = a[i].IsNumber() ? (float)a[i].GetDouble() : none;
 				return true;
 			};
-			if (!floats("mets", day.mets) || !floats("altitude", day.altitude))
+			if (!floats("mets", day.mets) || !floats("altitude", day.altitude) || !floats("climb", day.climb))
 				return false;
 			if (jd.HasMember("tag"))
 			{

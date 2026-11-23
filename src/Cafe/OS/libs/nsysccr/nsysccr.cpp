@@ -53,6 +53,7 @@ namespace
 			h.meter->SetLogger(LogLine);
 			if (h.overrideSource)
 				h.meter->SetDataSource(h.overrideSource);
+			cemuLog_log(LogType::FitMeter, "Fit Meter: data source: {}", h.meter->GetDataSource()->Describe());
 			h.link.SetLogger(LogLine);
 			h.link.SetPeer(h.meter.get());
 			if (!h.meter->LastError().empty())
@@ -176,26 +177,30 @@ namespace FitMeterHost
 		s.folder = m.GetDir();
 		s.activityPath = m.ActivityPath();
 		s.lastError = m.LastError();
-		auto src = m.GetDataSource();
-		if (src)
+		s.useFile = st.source == "file";
+		s.override = st.stepsOverrideDay >= 0 && st.stepsOverrideDay == m.LogicalToday();
+		s.overrideSteps = st.stepsOverride;
+		s.source = h.overrideSource ? h.overrideSource->Describe() : (s.useFile ? "File: " + s.activityPath : "Built-in demo (4-week cycle)");
+		if (s.override)
+			s.source += fmt::format(" + today's steps set to {}", st.stepsOverride);
+		FitMeter::Activity act;
+		std::string err;
+		if (m.GetActivity(act, err))
 		{
-			FitMeter::Activity act;
-			std::string err;
-			if (src->GetActivity(act, err))
-			{
-				int minuteDays = 0;
-				for (const auto& [dn, d] : act.days)
-					minuteDays += d.HasMinutes() ? 1 : 0;
-				s.activitySummary = fmt::format("{} day(s), {} with per-minute data", act.days.size(), minuteDays);
-				const sint32 today = s.clock.DayNumber() - (s.clock.hour < st.DayStartHour() ? 1 : 0);
-				auto it = act.days.find(today);
-				if (it != act.days.end())
-					s.stepsToday = it->second.steps;
-			}
-			else
-				s.activitySummary = err;
-			if (h.overrideSource)
-				s.activityPath = src->Describe();
+			int minuteDays = 0;
+			for (const auto& [dn, d] : act.days)
+				minuteDays += d.HasMinutes() ? 1 : 0;
+			s.activitySummary = fmt::format("{} day(s), {} with per-minute data", act.days.size(), minuteDays);
+			auto it = act.days.find(m.LogicalToday());
+			if (it != act.days.end())
+				s.stepsToday = it->second.steps;
+			if (!h.overrideSource && !s.useFile)
+				s.hint = "Sends made-up but realistic days. Load an activity.json for your own data.";
+		}
+		else
+		{
+			s.activitySummary = err;
+			s.hint = "No activity.json: the meter sends no steps. Load one, or switch to the built-in demo.";
 		}
 		return s;
 	}
@@ -236,6 +241,7 @@ namespace FitMeterHost
 			return false;
 		auto& m = Meter();
 		m.State().activityFile = "activity.json";
+		m.State().source = "file";
 		m.SaveState();
 		const fs::path dest = fs::path(_utf8ToPath(m.ActivityPath()));
 		std::error_code ec;
@@ -251,7 +257,7 @@ namespace FitMeterHost
 			}
 		}
 		if (!Host().overrideSource)
-			m.SetDataSource(std::make_shared<FitMeter::JsonFileMeterSource>(m.ActivityPath()));
+			m.UseSourceFromState();
 		return true;
 	}
 
@@ -259,9 +265,27 @@ namespace FitMeterHost
 	{
 		std::lock_guard lock(Host().mutex);
 		auto& m = Meter();
-		const auto now = m.Now();
-		const sint32 today = now.DayNumber() - (now.hour < m.State().DayStartHour() ? 1 : 0);
-		return FitMeter::SetDayStepsInFile(m.ActivityPath(), today, std::max(0, steps), error);
+		m.State().stepsOverrideDay = m.LogicalToday();
+		m.State().stepsOverride = std::clamp(steps, 0, 65529);
+		return m.SaveState();
+	}
+
+	void ClearStepsToday()
+	{
+		std::lock_guard lock(Host().mutex);
+		auto& m = Meter();
+		m.State().stepsOverrideDay = -1;
+		m.SaveState();
+	}
+
+	void UseDemo(bool demo)
+	{
+		std::lock_guard lock(Host().mutex);
+		auto& m = Meter();
+		m.State().source = demo ? "demo" : "file";
+		m.SaveState();
+		if (!Host().overrideSource)
+			m.UseSourceFromState();
 	}
 
 	fs::path GetFolder()
@@ -275,6 +299,9 @@ namespace FitMeterHost
 		std::lock_guard lock(Host().mutex);
 		auto& m = Meter();
 		Host().overrideSource = source;
-		m.SetDataSource(source ? source : std::make_shared<FitMeter::JsonFileMeterSource>(m.ActivityPath()));
+		if (source)
+			m.SetDataSource(source);
+		else
+			m.UseSourceFromState();
 	}
 }

@@ -5,6 +5,7 @@
 
 class wxButton;
 class wxCheckBox;
+class wxChoice;
 class wxSpinCtrl;
 class wxStaticText;
 
@@ -29,5 +30,7 @@ private:
 	wxStaticText* m_activity;
 	wxStaticText* m_folder;
 	wxSpinCtrl* m_stepsToday;
-	std::string m_lastStatusKey;
+	wxChoice* m_source;
+	wxCheckBox* m_override;
+	wxStaticText* m_hint;
 };

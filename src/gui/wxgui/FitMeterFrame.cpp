@@ -6,6 +6,7 @@
 
 #include <wx/button.h>
 #include <wx/checkbox.h>
+#include <wx/choice.h>
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
 #include <wx/panel.h>
@@ -64,21 +65,37 @@ FitMeterFrame::FitMeterFrame(wxWindow* parent)
 	{
 		auto* box = new wxStaticBoxSizer(wxVERTICAL, panel, _("Activity data"));
 		auto* sb = box->GetStaticBox();
+		auto* srow = new wxBoxSizer(wxHORIZONTAL);
+		srow->Add(new wxStaticText(sb, wxID_ANY, _("Source:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+		wxString choices[] = {_("Built-in demo (4-week cycle)"), _("activity.json file")};
+		m_source = new wxChoice(sb, wxID_ANY, wxDefaultPosition, wxDefaultSize, 2, choices);
+		m_source->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { FitMeterHost::UseDemo(m_source->GetSelection() == 0); Refresh(true); });
+		srow->Add(m_source, 0, wxALIGN_CENTER_VERTICAL);
+		box->Add(srow, 0, wxALL, 4);
 		m_activity = new wxStaticText(sb, wxID_ANY, "");
 		box->Add(m_activity, 0, wxEXPAND | wxALL, 4);
+		m_hint = new wxStaticText(sb, wxID_ANY, "");
+		box->Add(m_hint, 0, wxEXPAND | wxALL, 4);
 		auto* row = new wxBoxSizer(wxHORIZONTAL);
-		row->Add(new wxStaticText(sb, wxID_ANY, _("Steps today:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
-		m_stepsToday = new wxSpinCtrl(sb, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 65529, 0);
-		row->Add(m_stepsToday, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
-		auto* set = new wxButton(sb, wxID_ANY, _("Set"));
-		set->SetToolTip(_("Writes today's steps into activity.json (the other days and fields stay)"));
-		set->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+		m_override = new wxCheckBox(sb, wxID_ANY, _("Set today's steps:"));
+		m_override->SetToolTip(_("Replaces today's step count from the source (the per-minute data stays)"));
+		m_override->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) {
 			std::string err;
-			if (!FitMeterHost::SetStepsToday(m_stepsToday->GetValue(), err))
-				wxMessageBox(wxString::FromUTF8(err), _("Virtual Fit Meter"), wxOK | wxICON_ERROR, this);
+			if (m_override->GetValue())
+				FitMeterHost::SetStepsToday(m_stepsToday->GetValue(), err);
+			else
+				FitMeterHost::ClearStepsToday();
 			Refresh(true);
 		});
-		row->Add(set, 0, wxALIGN_CENTER_VERTICAL);
+		row->Add(m_override, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+		m_stepsToday = new wxSpinCtrl(sb, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 65529, 0);
+		m_stepsToday->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent&) {
+			std::string err;
+			if (m_override->GetValue())
+				FitMeterHost::SetStepsToday(m_stepsToday->GetValue(), err);
+			Refresh(true);
+		});
+		row->Add(m_stepsToday, 0, wxALIGN_CENTER_VERTICAL);
 		box->Add(row, 0, wxALL, 4);
 		auto* row2 = new wxBoxSizer(wxHORIZONTAL);
 		auto* load = new wxButton(sb, wxID_ANY, _("Load activity.json..."));
@@ -135,15 +152,14 @@ void FitMeterFrame::Refresh(bool force)
 		s.clock.hour, s.clock.minute, s.clockSet ? "" : " (not set yet: the game sets it)")));
 	m_lastSync->SetLabel(wxString::FromUTF8(s.lastSync.empty() ? std::string("Last sync: never") :
 		fmt::format("Last sync: {} ({} so far)", s.lastSync, s.syncCount)));
-	m_activity->SetLabel(wxString::FromUTF8(fmt::format("{}\n{}", s.activityPath, s.activitySummary)));
+	m_source->SetSelection(s.useFile ? 1 : 0);
+	m_activity->SetLabel(wxString::FromUTF8(fmt::format("Active: {}\n{}\nToday's steps so far: {}", s.source, s.activitySummary,
+		s.stepsToday >= 0 ? std::to_string(s.stepsToday) : std::string("none"))));
+	m_hint->SetLabel(wxString::FromUTF8(s.hint));
+	m_hint->Show(!s.hint.empty());
 	m_folder->SetLabel(wxString::FromUTF8("Meter folder: " + s.folder));
-	// the steps field follows the file unless the user is editing it
-	const std::string key = s.activityPath + "|" + std::to_string(s.stepsToday);
-	if (force || key != m_lastStatusKey)
-	{
-		if (!m_stepsToday->HasFocus() || force)
-			m_stepsToday->SetValue(std::max(0, s.stepsToday));
-		m_lastStatusKey = key;
-	}
+	m_override->SetValue(s.override);
+	if (force || !m_stepsToday->HasFocus())
+		m_stepsToday->SetValue(s.override ? s.overrideSteps : std::max(0, s.stepsToday));
 	Layout();
 }
