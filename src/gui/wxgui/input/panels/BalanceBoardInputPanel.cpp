@@ -28,7 +28,7 @@ BalanceBoardInputPanel::BalanceBoardInputPanel(wxWindow* parent)
 
 	auto* main_sizer = new wxBoxSizer(wxVERTICAL);
 
-	auto* info = new wxStaticText(this, wxID_ANY, _("The Balance Board always uses Wii Remote channel 4 (WPAD channel 3). Use a Wiimote on another controller for the menus.\nReal board: connect it (through a Wii BT Bridge, below on macOS, or pair it in the Bluetooth settings), then choose it as the device above (Refresh, or Other device... > Wiimote). While the device is a connected Balance Board it is the source and the options below are unused; with Keybo/Mouse or a pad the board is emulated; a Wii Remote or a board that isn't connected falls back to the emulated board and the line at the bottom says why."));
+	auto* info = new wxStaticText(this, wxID_ANY, _("The Balance Board always uses Wii Remote channel 4 (WPAD channel 3). Use a Wiimote on another controller for the menus.\nReal board: connect it (through a Wii BT Bridge, below on macOS, or pair it in the Bluetooth settings), then choose it as the device above (Refresh, or Other device... > Wiimote). While the device is a connected Balance Board it is the source and the options below are unused; with Keyboard/Mouse or a pad the board is emulated; a Wii Remote or a board that isn't connected falls back to the emulated board and the line at the bottom says why."));
 	info->Wrap(600);
 	main_sizer->Add(info, 0, wxALL, 5);
 
