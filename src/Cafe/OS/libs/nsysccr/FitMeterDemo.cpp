@@ -11,27 +11,27 @@ namespace FitMeter
 	namespace
 	{
 		// activity kinds: METs, steps per minute, and the meter's tag on level ground / going up / going down.
-		// The tag meanings aren't documented; what the game shows: sMETsColor[30] repeats in blocks of ten
-		// (0-9, 10-19, 20-29), and the Fit Meter Challenge's height counts only rising minutes tagged 14..19
-		// (SAMUProcess::SaveTag). So: level 0-9, up 10-19, down 20-29; climbs use 14..19.
+		// Tags (~/temp/wii-fit-u/fitmeter/ACTIVITY_TAGS.md): tag = 10 * group + kind, group 0 level, 1 up, 2 down;
+		// resting 0,1 (10,11,20,21), light 2,4 (12,22), walking 3,5 (13), running 6-9, ascending 14-19 (the only
+		// minutes the Fit Meter Challenge credits height for), descending 23-29. A higher kind = more intense.
 		struct Kind
 		{
 			float mets;
 			uint16_t spm;
 			int16_t tag, tagUp, tagDown;
 		};
-		constexpr Kind LIGHT = {1.8f, 30, 0, 10, 20};     // moving about the office / home
-		constexpr Kind WALK = {3.5f, 105, 2, 14, 22};     // a normal walk
-		constexpr Kind STROLL = {3.0f, 92, 1, 14, 21};    // a slow walk (late at night, in the park)
-		constexpr Kind BRISK = {4.3f, 118, 3, 15, 23};    // a brisk walk
-		constexpr Kind STAIRS = {8.0f, 70, 3, 16, 23};    // stairs (up: 8 METs)
-		constexpr Kind STAIRS_DOWN = {3.6f, 72, 3, 16, 23};
-		constexpr Kind RUN = {9.8f, 165, 5, 17, 25};      // running
-		constexpr Kind GYM = {5.5f, 14, 6, 6, 6};         // gym (weights, machines): few steps
-		constexpr Kind HIKE_UP = {6.8f, 82, 4, 16, 24};   // hiking uphill
-		constexpr Kind HIKE_DOWN = {4.6f, 96, 4, 16, 24};
-		constexpr Kind REST = {1.4f, 6, 0, 10, 20};       // a break (summit, bench)
-		constexpr Kind EASY = {2.5f, 60, 0, 10, 20};      // pottering about
+		constexpr Kind REST = {1.4f, 6, 1, 1, 1};          // a break (summit, bench)
+		constexpr Kind LIGHT = {1.8f, 30, 2, 14, 23};      // moving about the office / home
+		constexpr Kind EASY = {2.5f, 60, 4, 14, 23};       // pottering about
+		constexpr Kind GYM = {5.5f, 14, 4, 4, 4};          // gym (weights, machines): light on the meter, few steps
+		constexpr Kind STROLL = {3.0f, 92, 3, 15, 24};     // a slow walk (late at night, in the park)
+		constexpr Kind WALK = {3.5f, 105, 3, 16, 24};      // a normal walk
+		constexpr Kind BRISK = {4.3f, 118, 5, 16, 25};     // a brisk walk
+		constexpr Kind STAIRS = {8.0f, 70, 5, 18, 26};     // stairs up
+		constexpr Kind STAIRS_DOWN = {3.6f, 72, 5, 18, 26};
+		constexpr Kind HIKE_UP = {6.8f, 82, 5, 17, 25};    // hiking uphill
+		constexpr Kind HIKE_DOWN = {4.6f, 96, 5, 17, 25};  // and down
+		constexpr Kind RUN = {9.8f, 165, 7, 19, 27};       // running (the level kind scales 6-9 with the METs)
 
 		uint32_t Mix(uint32_t x)
 		{
@@ -60,6 +60,8 @@ namespace FitMeter
 				m.mets = k.mets * (1.0f + v / 100.0f);
 				m.steps = (uint16_t)std::max(0, (int)std::lround(k.spm * (1.0f + v / 100.0f)));
 				m.tag = climbTotal > 0.0f ? k.tagUp : climbTotal < 0.0f ? k.tagDown : k.tag;
+				if (climbTotal == 0.0f && k.spm >= 150) // running on the level: 6..9 by intensity
+					m.tag = (int16_t)std::clamp(6 + (int)((m.mets - 8.5f) / 0.8f), 6, 9);
 				m.climb += climbTotal / (float)minutes;
 			}
 		}
@@ -111,6 +113,7 @@ namespace FitMeter
 						const int r = at(18, 40) + Jit(t, 10, 8);
 						Add(d, r, 14, RUN, 25.0f, t, 8);
 						Add(d, r + 14, 16 + Jit(t, 11, 3), RUN, -25.0f, t, 9);
+						Add(d, r + 33, 12, Kind{RUN.mets * 1.08f, 172, 8, 19, 28}, 0.0f, t, 13); // a faster flat finish
 					}
 					else
 						Add(d, at(19, 10), 24, WALK, 0.0f, t, 10);
@@ -177,7 +180,8 @@ namespace FitMeter
 						Add(d, r + k * 15, 8, RUN, 18.0f, t, 42 + k);
 						Add(d, r + k * 15 + 8, 7, RUN, -18.0f, t, 46 + k);
 					}
-					Add(d, r + 60, 10, WALK, 0.0f, t, 50);
+					Add(d, r + 60, 15, Kind{8.6f, 158, 6, 18, 26}, 0.0f, t, 59); // an easy flat stretch home
+					Add(d, r + 75, 10, WALK, 0.0f, t, 50);
 					Bouts(d, at(10, 0), at(21, 30), t, 80);
 					break;
 				}

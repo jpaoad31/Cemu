@@ -75,7 +75,15 @@ the transfer date. Back up `mlc01/usr/save/00050000/10102300` (Wii Fit U USA) be
 - **Values:** METs per kind (walk 3.5, brisk 4.3, stairs 8, run 9.8, gym 5.5, hike up 6.8 / down 4.6, office
   1.8) with ±6% minute-to-minute variation; steps per minute to match (walk 105, run 165, gym 14...); kcal
   = Σ (METs − 1) × 1.05 per minute (~60 kg); not moving = METs 0.
-- **Tags** (inferred, see below): level 0 light / 1 stroll / 2 walk / 3 brisk / 4 hike / 5 run / 6 gym; going up 14-17 (counts for FMC height); going down 21-25.
+- **Tags**, per `~/temp/wii-fit-u/fitmeter/ACTIVITY_TAGS.md` (tag = 10 × group + kind; group 0 level, 1 up,
+  2 down):
+  - not moving 0, a rest 1;
+  - office/home and the gym 2/4 (light);
+  - walks 3 (normal/slow) and 5 (brisk, hikes, stairs on the level);
+  - level running 6-9, by the minute's METs;
+  - going up 15-19 (walk 15-16, hike 17, stairs 18, run 19), always with a climb;
+  - going down 24-27, always with a descent.
+  - Every minute the demo covers has METs, tag and altitude, so the graph can show it.
 
 ### What the game credits per sync, and the meter's memory
 
@@ -93,8 +101,8 @@ real per-date step records).
     the game disconnects. The meter keeps its history and sends it every time.
 - **The game asks for less per-minute data after a transfer:** banks 02-04 are asked for
   min(10080, minutes since the last transfer + 10) bytes.
-- **FMC height** counts only rising minutes whose activity tag is **14..19** (`SaveTag`: `tag - 14 < 6`),
-  credited ×10. Together with `sMETsColor` (blocks of ten) this suggests tags 0-9 level, 10-19 up, 20-29 down.
+- **FMC height** counts only rising minutes whose activity tag is **14..19** (`SaveTag`: `tag - 14 < 6`, the
+  "Ascending" tags), credited ×10.
 - **What the user's ~400K steps were:** the first sync after registration sent the demo's whole range,
   51 days of daily totals (469,865 steps) and 50 days of minutes. None of that was walked with the meter, and
   the game credited all of it because it was new. Re-syncs afterwards credited nothing.
@@ -245,7 +253,7 @@ Pinned by running the game's decoder. Each stream starts with the newest value.
   - `FC`/`FD` are date markers; not used.
   - 02 is METs × 10 (the graph's range is 0..140 + 30).
   - 03 is the altitude change in metres per minute: `01..7F` is +1..+127, `80..F9` is -1..-122 (`80+k` = -(k+1)). The first minute becomes the day's base height.
-  - 04 is the activity tag 0..29 (`sMETsColor` has 30 entries; the meanings are unknown).
+  - 04 is the activity tag 0..29 (see `~/temp/wii-fit-u/fitmeter/ACTIVITY_TAGS.md`): resting 0,1,10,11,20,21; light 2,4,12,22; walking 3,5,13; running 6-9; ascending 14-19 (the FMC height credit); descending 23-29. The graph colours each METs bar by `sMETsColor[tag]`.
 - The game stores altitude and tag minutes **only in days the METs stream created**, so all three per-minute streams start at the same minute.
 - **Re-syncs** replace each day's values (no double counting). Sending the whole history every time is right.
 
@@ -282,7 +290,7 @@ Pinned by running the game's decoder. Each stream starts with the newest value.
 - That the meter reports flag 0 once registered, whatever byte 8 was written. The game writes 0xFF for a person but requires 0 on read.
 - That `0xF0` unregisters.
 - The METs scale (×10).
-- The tag meanings.
+- The tag classes are decoded (ACTIVITY_TAGS.md); the kinds inside a class are not.
 - The kcal estimate, and the demo's METs/steps/kcal model.
 
 **`verify_sync_credits.py`:** registered at 00:48, the game credits 0 at once and on re-syncs, only the new steps later (+7,399, +2,971), and height from tagged climbs.
