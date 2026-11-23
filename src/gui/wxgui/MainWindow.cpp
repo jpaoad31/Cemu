@@ -12,6 +12,7 @@
 #include "input/HotkeySettings.h"
 #include "debugger/DebuggerWindow2.h"
 #include "EmulatedUSBDevices/EmulatedUSBDeviceFrame.h"
+#include "FitMeterFrame.h"
 #include "windows/PPCThreadsViewer/DebugPPCThreadsWindow.h"
 #include "windows/TextureRelationViewer/TextureRelationWindow.h"
 
@@ -115,6 +116,7 @@ enum
 	MAINFRAME_MENU_ID_TOOLS_TITLE_MANAGER,
 	MAINFRAME_MENU_ID_TOOLS_DOWNLOAD_MANAGER,
 	MAINFRAME_MENU_ID_TOOLS_EMULATED_USB_DEVICES,
+	MAINFRAME_MENU_ID_TOOLS_FIT_METER,
 	// cpu
 	// cpu->timer speed
 	MAINFRAME_MENU_ID_TIMER_SPEED_1X = 20700,
@@ -201,6 +203,7 @@ EVT_MENU(MAINFRAME_MENU_ID_TOOLS_MEMORY_SEARCHER, MainWindow::OnToolsInput)
 EVT_MENU(MAINFRAME_MENU_ID_TOOLS_TITLE_MANAGER, MainWindow::OnToolsInput)
 EVT_MENU(MAINFRAME_MENU_ID_TOOLS_DOWNLOAD_MANAGER, MainWindow::OnToolsInput)
 EVT_MENU(MAINFRAME_MENU_ID_TOOLS_EMULATED_USB_DEVICES, MainWindow::OnToolsInput)
+EVT_MENU(MAINFRAME_MENU_ID_TOOLS_FIT_METER, MainWindow::OnToolsInput)
 // cpu menu
 EVT_MENU(MAINFRAME_MENU_ID_TIMER_SPEED_8X, MainWindow::OnDebugSetting)
 EVT_MENU(MAINFRAME_MENU_ID_TIMER_SPEED_4X, MainWindow::OnDebugSetting)
@@ -1571,6 +1574,23 @@ void MainWindow::OnToolsInput(wxCommandEvent& event)
 		}
 		break;
 	}
+	case MAINFRAME_MENU_ID_TOOLS_FIT_METER:
+	{
+		if (!m_fit_meter)
+		{
+			m_fit_meter = new FitMeterFrame(this);
+			m_fit_meter->Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& event)
+				{
+					if (event.CanVeto()) {
+						m_fit_meter->Show(false);
+						event.Veto();
+					}
+				});
+		}
+		m_fit_meter->Show(true);
+		m_fit_meter->Raise();
+		break;
+	}
 	case MAINFRAME_MENU_ID_TOOLS_EMULATED_USB_DEVICES:
 	{
 		if (m_usb_devices)
@@ -2338,6 +2358,7 @@ void MainWindow::RecreateMenu()
 	toolsMenu->Append(MAINFRAME_MENU_ID_TOOLS_TITLE_MANAGER, _("&Title Manager"));
 	toolsMenu->Append(MAINFRAME_MENU_ID_TOOLS_DOWNLOAD_MANAGER, _("&Download Manager"));
 	toolsMenu->Append(MAINFRAME_MENU_ID_TOOLS_EMULATED_USB_DEVICES, _("&Emulated USB Devices"));
+	toolsMenu->Append(MAINFRAME_MENU_ID_TOOLS_FIT_METER, _("Virtual &Fit Meter"));
 
 	m_menuBar->Append(toolsMenu, _("&Tools"));
 
@@ -2391,6 +2412,7 @@ void MainWindow::RecreateMenu()
 	logCosModulesMenu->AppendCheckItem(MAINFRAME_MENU_ID_DEBUG_LOGGING0 + stdx::to_underlying(LogType::SWKBD), _("swkbd API"))->Check(cemuLog_isLoggingEnabled(LogType::SWKBD));
 	logCosModulesMenu->AppendCheckItem(MAINFRAME_MENU_ID_DEBUG_LOGGING0 + stdx::to_underlying(LogType::SoundAPI), _("Audio API"))->Check(cemuLog_isLoggingEnabled(LogType::SoundAPI));
 	logCosModulesMenu->AppendCheckItem(MAINFRAME_MENU_ID_DEBUG_LOGGING0 + stdx::to_underlying(LogType::InputAPI), _("Input API"))->Check(cemuLog_isLoggingEnabled(LogType::InputAPI));
+	logCosModulesMenu->AppendCheckItem(MAINFRAME_MENU_ID_DEBUG_LOGGING0 + stdx::to_underlying(LogType::FitMeter), _("Fit Meter / IR (nsysccr)"))->Check(cemuLog_isLoggingEnabled(LogType::FitMeter));
 
 	debugLoggingMenu->AppendSubMenu(logCosModulesMenu, _("&CafeOS modules logging"));
 	debugLoggingMenu->AppendSeparator();

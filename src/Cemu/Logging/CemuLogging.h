@@ -39,6 +39,7 @@ enum class LogType : sint32
 	NN_SL = 26,
 
 	TextureReadback = 29,
+	FitMeter = 30, // the GamePad's IR port and the virtual Wii Fit Meter (nsysccr)
 	ProcUi = 39,
 	nlibcurl = 41,
 	SWKBD = 45,

@@ -22,6 +22,7 @@ class DiscordPresence;
 class TitleManager;
 class GraphicPacksWindow2;
 class EmulatedUSBDeviceFrame;
+class FitMeterFrame;
 class wxLaunchGameEvent;
 
 wxDECLARE_EVENT(wxEVT_LAUNCH_GAME, wxLaunchGameEvent);
@@ -169,6 +170,7 @@ private:
 	MemorySearcherTool* m_toolWindow = nullptr;
 	TitleManager* m_title_manager = nullptr;
 	EmulatedUSBDeviceFrame* m_usb_devices = nullptr;
+	FitMeterFrame* m_fit_meter = nullptr;
 	PadViewFrame* m_padView = nullptr;
 	GraphicPacksWindow2* m_graphic_pack_window = nullptr;
 

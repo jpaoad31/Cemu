@@ -42,6 +42,7 @@
 #include "OS/libs/TCL/TCL.h"
 #include "OS/libs/nn_cmpt/nn_cmpt.h"
 #include "OS/libs/nn_ccr/nn_ccr.h"
+#include "OS/libs/nsysccr/nsysccr.h"
 #include "OS/libs/nn_temp/nn_temp.h"
 #include "OS/libs/nn_aoc/nn_aoc.h"
 #include "OS/libs/nn_pdm/nn_pdm.h"
@@ -93,6 +94,8 @@ std::span<COSModule*> GetCOSModules()
 		TCL::GetModule(),
 		nn::cmpt::GetModule(),
 		nn::ccr::GetModule(),
+		nsysccr::GetModule(),
+		nsysccr::GetVpadBaseModule(),
 		nn::temp::GetModule(),
 		nn::aoc::GetModule(),
 		nn::pdm::GetModule(),

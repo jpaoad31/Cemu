@@ -116,6 +116,7 @@ const std::map<LogType, std::string> g_logging_window_mapping
 	{LogType::Patches,            "Graphic pack patches"},
 	{LogType::TextureCache,       "Texture cache"},
 	{LogType::TextureReadback,    "Texture readback"},
+	{LogType::FitMeter,           "Fit Meter / IR"},
 	{LogType::OpenGLLogging,      "OpenGL debug output"},
 	{LogType::VulkanValidation,   "Vulkan validation layer"},
 };

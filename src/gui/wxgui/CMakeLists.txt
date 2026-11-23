@@ -114,6 +114,8 @@ add_library(CemuWxGui STATIC
   wxCemuConfig.h
   EmulatedUSBDevices/EmulatedUSBDeviceFrame.cpp
   EmulatedUSBDevices/EmulatedUSBDeviceFrame.h
+  FitMeterFrame.cpp
+  FitMeterFrame.h
   windows/PPCThreadsViewer
   windows/PPCThreadsViewer/DebugPPCThreadsWindow.cpp
   windows/PPCThreadsViewer/DebugPPCThreadsWindow.h

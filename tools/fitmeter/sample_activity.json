@@ -1,0 +1,18 @@
+{
+  "default_tag": 0,
+  "days": [
+    { "date": "2026-11-22", "steps": 6543, "kcal": 210,
+      "segments": [
+        { "start": "07:30", "minutes": 25, "mets": 3.5, "tag": 2, "climb_m": 15 },
+        { "start": "12:10", "minutes": 40, "mets": 6.0, "tag": 14 },
+        { "start": "13:00", "minutes": 10, "mets": 4.2, "tag": 23, "climb_m": -10 }
+      ] },
+    { "date": "2026-11-21", "steps": 12001, "kcal": 380,
+      "segments": [ { "start": "18:00", "minutes": 60, "mets": 7.5, "tag": 20, "climb_m": 120 } ] },
+    { "date": "2026-11-20", "steps": 800 },
+    { "date": "2026-11-18", "steps": 15000, "kcal": 500 },
+    { "date": "2026-11-17", "steps": 70000, "kcal": 70000,
+      "altitude": [ 50, 50, 51, 53, 60, 60, 59, 40, 40, 300, 300 ] },
+    { "date": "2026-10-01", "steps": 4000 }
+  ]
+}

@@ -1,0 +1,280 @@
+#include "Cafe/OS/common/OSCommon.h"
+#include "Cafe/OS/libs/nsysccr/nsysccr.h"
+#include "Cafe/OS/libs/nsysccr/DrcIrLink.h"
+#include "Cafe/OS/libs/nsysccr/VirtualFitMeter.h"
+#include "config/ActiveSettings.h"
+
+#include <chrono>
+#include <mutex>
+
+// The GamePad's IR engine and the virtual Fit Meter behind it.
+//
+// Wii Fit U's IRC library (statically linked) uses three imports: CCRCDCPerIrdaControl (connect / send /
+// receive / disconnect requests to the DRC), VPADBASEGetIRCStatus (bit 1: the link is up, bit 0: a frame
+// or result waits) and VPADBASEClearIRCEvent. IRCInit does nothing unless VPADBASEIsInit is nonzero.
+// Without these exports Cemu's unresolved-import stub returned 0 and the game failed with "not initialised".
+
+namespace
+{
+	struct FitMeterHostState
+	{
+		std::recursive_mutex mutex;
+		std::unique_ptr<FitMeter::VirtualFitMeter> meter;
+		FitMeter::DrcIrLink link;
+		std::shared_ptr<FitMeter::MeterDataSource> overrideSource;
+	};
+
+	FitMeterHostState& Host()
+	{
+		static FitMeterHostState s;
+		return s;
+	}
+
+	uint64 NowMs()
+	{
+		return (uint64)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	}
+
+	void LogLine(const std::string& s)
+	{
+		cemuLog_log(LogType::FitMeter, "{}", s);
+	}
+
+	// with the host mutex held
+	FitMeter::VirtualFitMeter& Meter()
+	{
+		auto& h = Host();
+		if (!h.meter)
+		{
+			const fs::path dir = ActiveSettings::GetUserDataPath("fitmeter");
+			std::error_code ec;
+			fs::create_directories(dir, ec);
+			h.meter = std::make_unique<FitMeter::VirtualFitMeter>(_pathToUtf8(dir));
+			h.meter->SetLogger(LogLine);
+			if (h.overrideSource)
+				h.meter->SetDataSource(h.overrideSource);
+			h.link.SetLogger(LogLine);
+			h.link.SetPeer(h.meter.get());
+			if (!h.meter->LastError().empty())
+				cemuLog_log(LogType::Force, "Fit Meter: {}", h.meter->LastError());
+		}
+		return *h.meter;
+	}
+}
+
+namespace nsysccr
+{
+	sint32 CCRCDCPerIrdaControl(uint8 dest, uint8* request, uint32 requestSize, uint8* response, uint32 responseSize)
+	{
+		if (!request || !response)
+			return -1;
+		requestSize = std::min<uint32>(requestSize, 0x1000);
+		responseSize = std::min<uint32>(responseSize, 0x1000);
+		std::lock_guard lock(Host().mutex);
+		Meter();
+		return Host().link.Control(dest, request, requestSize, response, responseSize, NowMs());
+	}
+
+	class : public COSModule
+	{
+	public:
+		std::string_view GetName() override
+		{
+			return "nsysccr";
+		}
+
+		void RPLMapped() override
+		{
+			cafeExportRegister("nsysccr", CCRCDCPerIrdaControl, LogType::Placeholder);
+		}
+
+		void RPLUnmapped() override
+		{
+			std::lock_guard lock(Host().mutex);
+			Host().link.Reset();
+		}
+	} s_nsysccrModule;
+
+	sint32 VPADBASEIsInit()
+	{
+		return 1;
+	}
+
+	uint32 VPADBASEGetIRCStatus(sint32 channel)
+	{
+		if (channel != 0)
+			return 0;
+		std::lock_guard lock(Host().mutex);
+		Meter();
+		return Host().link.GetStatus(NowMs());
+	}
+
+	void VPADBASEClearIRCEvent(sint32 channel)
+	{
+		if (channel != 0)
+			return;
+		std::lock_guard lock(Host().mutex);
+		Host().link.ClearEvent();
+	}
+
+	class : public COSModule
+	{
+	public:
+		std::string_view GetName() override
+		{
+			return "vpadbase";
+		}
+
+		void RPLMapped() override
+		{
+			cafeExportRegister("vpadbase", VPADBASEIsInit, LogType::Placeholder);
+			cafeExportRegister("vpadbase", VPADBASEGetIRCStatus, LogType::Placeholder);
+			cafeExportRegister("vpadbase", VPADBASEClearIRCEvent, LogType::Placeholder);
+		}
+	} s_vpadbaseModule;
+
+	COSModule* GetModule()
+	{
+		return &s_nsysccrModule;
+	}
+
+	COSModule* GetVpadBaseModule()
+	{
+		return &s_vpadbaseModule;
+	}
+}
+
+namespace FitMeterHost
+{
+	Status GetStatus()
+	{
+		auto& h = Host();
+		std::lock_guard lock(h.mutex);
+		auto& m = Meter();
+		const auto& st = m.State();
+		Status s;
+		s.enabled = st.enabled;
+		s.autoPress = st.autoPress;
+		s.registered = st.registered;
+		s.pet = st.IsPet();
+		s.clockSet = st.clockSet;
+		s.miiName = st.miiName;
+		s.samuId = st.samuId;
+		s.saveDataId = st.saveDataId;
+		s.registeredAt = st.registeredAt;
+		s.lastSync = st.lastSync;
+		s.syncCount = st.syncCount;
+		s.clock = m.Now();
+		switch (h.link.GetState())
+		{
+		case FitMeter::DrcIrLink::State::Connected: s.link = "connected"; break;
+		case FitMeter::DrcIrLink::State::Waiting: s.link = "the game is waiting for the meter"; break;
+		default: s.link = m.IsConnectRequested(NowMs()) ? "the game is waiting for the meter" : "idle"; break;
+		}
+		s.framesIn = h.link.FramesIn();
+		s.framesOut = h.link.FramesOut();
+		s.folder = m.GetDir();
+		s.activityPath = m.ActivityPath();
+		s.lastError = m.LastError();
+		auto src = m.GetDataSource();
+		if (src)
+		{
+			FitMeter::Activity act;
+			std::string err;
+			if (src->GetActivity(act, err))
+			{
+				int minuteDays = 0;
+				for (const auto& [dn, d] : act.days)
+					minuteDays += d.HasMinutes() ? 1 : 0;
+				s.activitySummary = fmt::format("{} day(s), {} with per-minute data", act.days.size(), minuteDays);
+				const sint32 today = s.clock.DayNumber() - (s.clock.hour < st.DayStartHour() ? 1 : 0);
+				auto it = act.days.find(today);
+				if (it != act.days.end())
+					s.stepsToday = it->second.steps;
+			}
+			else
+				s.activitySummary = err;
+			if (h.overrideSource)
+				s.activityPath = src->Describe();
+		}
+		return s;
+	}
+
+	void SetEnabled(bool enabled)
+	{
+		std::lock_guard lock(Host().mutex);
+		Meter().State().enabled = enabled;
+		Meter().SaveState();
+	}
+
+	void SetAutoPress(bool autoPress)
+	{
+		std::lock_guard lock(Host().mutex);
+		Meter().State().autoPress = autoPress;
+		Meter().SaveState();
+	}
+
+	void PressButton()
+	{
+		std::lock_guard lock(Host().mutex);
+		Meter().PressButton(NowMs());
+		LogLine("Fit Meter: button pressed (UI)");
+	}
+
+	void Unregister()
+	{
+		std::lock_guard lock(Host().mutex);
+		Meter().Unregister();
+		LogLine("Fit Meter: reset to an unregistered meter (UI)");
+	}
+
+	bool ImportActivityFile(const fs::path& source, std::string& error)
+	{
+		std::lock_guard lock(Host().mutex);
+		FitMeter::Activity act;
+		if (!FitMeter::LoadActivityFile(_pathToUtf8(source), act, error))
+			return false;
+		auto& m = Meter();
+		m.State().activityFile = "activity.json";
+		m.SaveState();
+		const fs::path dest = fs::path(_utf8ToPath(m.ActivityPath()));
+		std::error_code ec;
+		if (fs::exists(dest, ec) && !fs::equivalent(source, dest, ec))
+			fs::copy_file(dest, dest.parent_path() / "activity.json.bak", fs::copy_options::overwrite_existing, ec);
+		if (!fs::equivalent(source, dest, ec))
+		{
+			fs::copy_file(source, dest, fs::copy_options::overwrite_existing, ec);
+			if (ec)
+			{
+				error = "can't copy the file: " + ec.message();
+				return false;
+			}
+		}
+		if (!Host().overrideSource)
+			m.SetDataSource(std::make_shared<FitMeter::JsonFileMeterSource>(m.ActivityPath()));
+		return true;
+	}
+
+	bool SetStepsToday(sint32 steps, std::string& error)
+	{
+		std::lock_guard lock(Host().mutex);
+		auto& m = Meter();
+		const auto now = m.Now();
+		const sint32 today = now.DayNumber() - (now.hour < m.State().DayStartHour() ? 1 : 0);
+		return FitMeter::SetDayStepsInFile(m.ActivityPath(), today, std::max(0, steps), error);
+	}
+
+	fs::path GetFolder()
+	{
+		std::lock_guard lock(Host().mutex);
+		return _utf8ToPath(Meter().GetDir());
+	}
+
+	void SetDataSource(std::shared_ptr<FitMeter::MeterDataSource> source)
+	{
+		std::lock_guard lock(Host().mutex);
+		auto& m = Meter();
+		Host().overrideSource = source;
+		m.SetDataSource(source ? source : std::make_shared<FitMeter::JsonFileMeterSource>(m.ActivityPath()));
+	}
+}
