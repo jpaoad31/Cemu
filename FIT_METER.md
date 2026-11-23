@@ -75,7 +75,40 @@ the transfer date. Back up `mlc01/usr/save/00050000/10102300` (Wii Fit U USA) be
 - **Values:** METs per kind (walk 3.5, brisk 4.3, stairs 8, run 9.8, gym 5.5, hike up 6.8 / down 4.6, office
   1.8) with ±6% minute-to-minute variation; steps per minute to match (walk 105, run 165, gym 14...); kcal
   = Σ (METs − 1) × 1.05 per minute (~60 kg); not moving = METs 0.
-- **Tags (guesses; the meanings are unknown):** 0 light, 2 walk, 3 brisk/stairs, 12 hike, 14 run, 23 gym.
+- **Tags** (inferred, see below): level 0 light / 1 stroll / 2 walk / 3 brisk / 4 hike / 5 run / 6 gym; going up 14-17 (counts for FMC height); going down 21-25.
+
+### What the game credits per sync, and the meter's memory
+
+Read from the game (`SAMUProcess::AddFMCSteps`, `CalcTransCalorie`, `SaveTag`,
+`SAMUReceiveProcessOnStageWait`) and run through its code (`tools/fitmeter/verify_sync_credits.py`, with the
+real per-date step records).
+
+- **The game dedupes per date.**
+  - Fit Meter Challenge steps: per received day, received steps minus the steps the save already holds for that
+    date (`OtherMeasureData` step records). Increases minus decreases are credited.
+  - The piggy bank: the same with kcal (`TrainingData` / `getOtherCalorie`).
+  - `CheckStepsMatch` / `CheckCalorieMatch` first test whether the meter's days are shifted ±1 against the
+    last transfer (TransDate), and line them up.
+  - A re-sync credits 0. The real meter needs no "transferred" command, and the sync has none: after bank 06
+    the game disconnects. The meter keeps its history and sends it every time.
+- **The game asks for less per-minute data after a transfer:** banks 02-04 are asked for
+  min(10080, minutes since the last transfer + 10) bytes.
+- **FMC height** counts only rising minutes whose activity tag is **14..19** (`SaveTag`: `tag - 14 < 6`),
+  credited ×10. Together with `sMETsColor` (blocks of ten) this suggests tags 0-9 level, 10-19 up, 20-29 down.
+- **What the user's ~400K steps were:** the first sync after registration sent the demo's whole range,
+  51 days of daily totals (469,865 steps) and 50 days of minutes. None of that was walked with the meter, and
+  the game credited all of it because it was new. Re-syncs afterwards credited nothing.
+- **The fix:** a meter has no data from before its registration.
+  - `history_start` in meter.json is set at the ident write (registration). For older files it is
+    `registered_at` + the clock offset.
+  - Nothing before it is sent: no daily totals for earlier days, no minutes before it. The registration day's
+    total counts from that minute (demo).
+  - Minutes cover at most 7 days, the real meter's memory: 10080 bytes is the game's maximum ask.
+  - **Clear meter history** (the window) moves `history_start` to now and keeps the registration.
+- **The per-minute graph** (`AMG_MakeSAMUDataFromSavedata`) shows a minute only when METs, altitude and tag
+  are all present in that day's slot. It opens at the transfer time − 2 h.
+  - The demo sends all three for every minute it covers.
+  - A sync at night shows the demo's sleeping hours (METs 0, flat altitude), which looks empty.
 
 ### Night owl
 
@@ -212,7 +245,7 @@ Pinned by running the game's decoder. Each stream starts with the newest value.
 **Verified**
 
 - Build: release, macOS bundle.
-- `FitMeterTest.cpp`: 346 checks, 0 failures. Since the demo, it also checks the 28-day mapping across midnight and the wrap, determinism and lining up (yesterday at tomorrow's sync = today complete), partial today, the night-owl totals (a Saturday's 00:00-02:59 walk counts for Friday; at 01:30 the per-day stream's today is Friday so far), kcal, and the steps-today override (only for that day). It contains a C++ model of the game's IRC + IRCU master, written from the asm. It covers:
+- `FitMeterTest.cpp`: 362 checks, 0 failures. It also checks the meter's memory: nothing before registration, the next day's sync, the 7-day minute window, Clear history, and the old-meter.json fallback. Since the demo, it also checks the 28-day mapping across midnight and the wrap, determinism and lining up (yesterday at tomorrow's sync = today complete), partial today, the night-owl totals (a Saturday's 00:00-02:59 walk counts for Friday; at 01:30 the per-day stream's today is Friday so far), kcal, and the steps-today override (only for that day). It contains a C++ model of the game's IRC + IRCU master, written from the asm. It covers:
   - frames, the CRC, the XOR, the rxSize mapping;
   - connect timeout → result 1;
   - registration with chunked 1200-byte writes;
@@ -242,6 +275,10 @@ Pinned by running the game's decoder. Each stream starts with the newest value.
 - The METs scale (×10).
 - The tag meanings.
 - The kcal estimate, and the demo's METs/steps/kcal model.
+
+**`verify_sync_credits.py`:** registered at 00:48, the game credits 0 at once and on re-syncs, only the new steps later (+7,399, +2,971), and height from tagged climbs.
+
+**`verify_encoder.py`** now also asserts the dates the game assigns: no day before the data or after today. It passes with `--since` (registration) at several times.
 
 **Seen in the game (the user's test):** registration and sync work with the retail game. That first sync
 had no activity.json, so it sent zeros; the demo is now the default.

@@ -24,6 +24,7 @@ namespace FitMeterHost
 		uint32 samuId = 0;
 		uint32 saveDataId = 0;
 		std::string registeredAt;
+		std::string historyStart;   // the meter has no data before this (its registration, or "clear history")
 		std::string lastSync;
 		uint32 syncCount = 0;
 		FitMeter::MeterTime clock;
@@ -46,6 +47,7 @@ namespace FitMeterHost
 	void SetAutoPress(bool autoPress);
 	void PressButton();                  // the meter's button: links if the game is waiting (or within 10 s)
 	void Unregister();                   // back to a new, unregistered meter (the game's save keeps its own record)
+	void ClearHistory();                 // the meter forgets its data before now (keeps the registration)
 	bool ImportActivityFile(const fs::path& source, std::string& error); // copies it to <folder>/activity.json
 	bool SetStepsToday(sint32 steps, std::string& error); // overrides today's step count (any source)
 	void ClearStepsToday();

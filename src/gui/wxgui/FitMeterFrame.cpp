@@ -57,7 +57,13 @@ FitMeterFrame::FitMeterFrame(wxWindow* parent)
 				Refresh(true);
 			}
 		});
-		box->Add(reset, 0, wxALL, 4);
+		auto* clear = new wxButton(sb, wxID_ANY, _("Clear meter history"));
+		clear->SetToolTip(_("The meter forgets everything before now, as after a fresh registration (the registration stays). Wii Fit U keeps what it already transferred."));
+		clear->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { FitMeterHost::ClearHistory(); Refresh(true); });
+		auto* brow = new wxBoxSizer(wxHORIZONTAL);
+		brow->Add(reset, 0, wxRIGHT, 6);
+		brow->Add(clear, 0);
+		box->Add(brow, 0, wxALL, 4);
 		top->Add(box, 0, wxEXPAND | wxALL, 6);
 	}
 
@@ -144,8 +150,8 @@ void FitMeterFrame::Refresh(bool force)
 	m_press->Enable(s.enabled);
 	m_link->SetLabel(wxString::FromUTF8(fmt::format("Link: {} ({} frames in, {} out)", s.link, s.framesIn, s.framesOut)));
 	if (s.registered)
-		m_registration->SetLabel(wxString::FromUTF8(fmt::format("Registered to: {}{}   (meter ID {:08X}, save {:08X}, since {})",
-			s.miiName.empty() ? "(no Mii name)" : s.miiName, s.pet ? " (pet)" : "", s.samuId, s.saveDataId, s.registeredAt)));
+		m_registration->SetLabel(wxString::FromUTF8(fmt::format("Registered to: {}{}   (meter ID {:08X}, save {:08X}, since {})\nThe meter has data from {} on (a real meter has nothing from before its registration; minutes: the last 7 days)",
+			s.miiName.empty() ? "(no Mii name)" : s.miiName, s.pet ? " (pet)" : "", s.samuId, s.saveDataId, s.registeredAt, s.historyStart)));
 	else
 		m_registration->SetLabel(_("Not registered: register it in Wii Fit U (Fit Meter > settings)"));
 	m_clock->SetLabel(wxString::FromUTF8(fmt::format("Meter clock: {:04}-{:02}-{:02} {:02}:{:02}{}", s.clock.year, s.clock.month, s.clock.day,

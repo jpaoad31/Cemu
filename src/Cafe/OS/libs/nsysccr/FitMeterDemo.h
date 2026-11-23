@@ -29,7 +29,7 @@ namespace FitMeter
 	class DemoMeterSource : public MeterDataSource
 	{
 	public:
-		bool GetActivity(const MeterTime& now, int dayStartHour, Activity& out, std::string& error) override;
+		bool GetActivity(const SourceContext& ctx, Activity& out, std::string& error) override;
 		std::string Describe() const override { return "Built-in demo (4-week cycle)"; }
 	};
 

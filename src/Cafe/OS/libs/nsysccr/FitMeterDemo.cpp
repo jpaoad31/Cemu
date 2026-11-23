@@ -10,24 +10,28 @@ namespace FitMeter
 {
 	namespace
 	{
-		// activity kinds: METs, steps per minute, the meter's tag. The tag meanings are not known (the game
-		// only colours its METs graph by them: sMETsColor[30]); these are plausible picks, one per kind.
+		// activity kinds: METs, steps per minute, and the meter's tag on level ground / going up / going down.
+		// The tag meanings aren't documented; what the game shows: sMETsColor[30] repeats in blocks of ten
+		// (0-9, 10-19, 20-29), and the Fit Meter Challenge's height counts only rising minutes tagged 14..19
+		// (SAMUProcess::SaveTag). So: level 0-9, up 10-19, down 20-29; climbs use 14..19.
 		struct Kind
 		{
 			float mets;
 			uint16_t spm;
-			int16_t tag;
+			int16_t tag, tagUp, tagDown;
 		};
-		constexpr Kind LIGHT = {1.8f, 30, 0};    // moving about the office / home
-		constexpr Kind WALK = {3.5f, 105, 2};    // a normal walk
-		constexpr Kind STROLL = {3.0f, 92, 2};   // a slow walk (late at night, in the park)
-		constexpr Kind BRISK = {4.3f, 118, 3};   // a brisk walk
-		constexpr Kind STAIRS = {8.0f, 70, 3};   // climbing stairs
-		constexpr Kind RUN = {9.8f, 165, 14};    // running
-		constexpr Kind GYM = {5.5f, 14, 23};     // gym (weights, machines): few steps
-		constexpr Kind HIKE_UP = {6.8f, 82, 12}; // hiking uphill
-		constexpr Kind HIKE_DOWN = {4.6f, 96, 12};
-		constexpr Kind REST = {1.4f, 6, 0};      // a break (summit, bench)
+		constexpr Kind LIGHT = {1.8f, 30, 0, 10, 20};     // moving about the office / home
+		constexpr Kind WALK = {3.5f, 105, 2, 14, 22};     // a normal walk
+		constexpr Kind STROLL = {3.0f, 92, 1, 14, 21};    // a slow walk (late at night, in the park)
+		constexpr Kind BRISK = {4.3f, 118, 3, 15, 23};    // a brisk walk
+		constexpr Kind STAIRS = {8.0f, 70, 3, 16, 23};    // stairs (up: 8 METs)
+		constexpr Kind STAIRS_DOWN = {3.6f, 72, 3, 16, 23};
+		constexpr Kind RUN = {9.8f, 165, 5, 17, 25};      // running
+		constexpr Kind GYM = {5.5f, 14, 6, 6, 6};         // gym (weights, machines): few steps
+		constexpr Kind HIKE_UP = {6.8f, 82, 4, 16, 24};   // hiking uphill
+		constexpr Kind HIKE_DOWN = {4.6f, 96, 4, 16, 24};
+		constexpr Kind REST = {1.4f, 6, 0, 10, 20};       // a break (summit, bench)
+		constexpr Kind EASY = {2.5f, 60, 0, 10, 20};      // pottering about
 
 		uint32_t Mix(uint32_t x)
 		{
@@ -55,7 +59,7 @@ namespace FitMeter
 				const int v = Jit(t * 3 + 1, n * 1000 + i, 6); // -6..+6 percent
 				m.mets = k.mets * (1.0f + v / 100.0f);
 				m.steps = (uint16_t)std::max(0, (int)std::lround(k.spm * (1.0f + v / 100.0f)));
-				m.tag = k.tag;
+				m.tag = climbTotal > 0.0f ? k.tagUp : climbTotal < 0.0f ? k.tagDown : k.tag;
 				m.climb += climbTotal / (float)minutes;
 			}
 		}
@@ -92,7 +96,7 @@ namespace FitMeter
 				Bouts(d, at(13, 10), at(17, 20), t, 30);
 				// down the stairs and home (the station is 4 m lower than the office street)
 				const int home = at(17, 35) + Jit(t, 6, 12);
-				Add(d, home, 2, Kind{3.6f, 72, 3}, -12.0f, t, 5); // stairs down
+				Add(d, home, 2, STAIRS_DOWN, -12.0f, t, 5); // stairs down
 				Add(d, home + 3, 17 + Jit(t, 7, 2), WALK, -4.0f, t, 6);
 				Bouts(d, at(18, 30), at(22, 30), t, 50);
 				switch (weekday)
@@ -149,9 +153,9 @@ namespace FitMeter
 					break;
 				}
 				default: // week 3: a lazy day (after the walk home from the night out)
-					Add(d, at(11, 20), 5, Kind{2.5f, 60, 0}, 0.0f, t, 29);
-					Add(d, at(14, 50), 6, Kind{2.5f, 60, 0}, 0.0f, t, 30);
-					Add(d, at(19, 30), 4, Kind{2.5f, 60, 0}, 0.0f, t, 31);
+					Add(d, at(11, 20), 5, EASY, 0.0f, t, 29);
+					Add(d, at(14, 50), 6, EASY, 0.0f, t, 30);
+					Add(d, at(19, 30), 4, EASY, 0.0f, t, 31);
 					break;
 				}
 			}
@@ -182,14 +186,14 @@ namespace FitMeter
 					Bouts(d, at(13, 0), at(21, 0), t, 90);
 					break;
 				case 2: // lazy
-					Add(d, at(12, 10), 7, Kind{2.5f, 60, 0}, 0.0f, t, 52);
-					Add(d, at(18, 40), 5, Kind{2.5f, 60, 0}, 0.0f, t, 53);
+					Add(d, at(12, 10), 7, EASY, 0.0f, t, 52);
+					Add(d, at(18, 40), 5, EASY, 0.0f, t, 53);
 					break;
 				default: // a walk to the old town: 220 steps of stairs to the castle
 					Add(d, at(14, 0) + Jit(t, 54, 10), 40, WALK, 0.0f, t, 54);
 					Add(d, at(14, 45), 6, STAIRS, 30.0f, t, 55);
 					Add(d, at(14, 51), 25, STROLL, 0.0f, t, 56);
-					Add(d, at(15, 20), 5, Kind{3.6f, 72, 3}, -30.0f, t, 57);
+					Add(d, at(15, 20), 5, STAIRS_DOWN, -30.0f, t, 57);
 					Add(d, at(15, 25), 38, WALK, 0.0f, t, 58);
 					Bouts(d, at(16, 30), at(21, 30), t, 100);
 					break;
@@ -226,8 +230,10 @@ namespace FitMeter
 		return mets > 1.0f ? (mets - 1.0f) * 1.05f : 0.0f;
 	}
 
-	bool DemoMeterSource::GetActivity(const MeterTime& now, int dayStartHour, Activity& out, std::string&)
+	bool DemoMeterSource::GetActivity(const SourceContext& ctx, Activity& out, std::string&)
 	{
+		const MeterTime& now = ctx.now;
+		const int dayStartHour = ctx.dayStartHour;
 		out = Activity();
 		const int32_t today = now.DayNumber();
 		const int nowMinute = now.hour * 60 + now.minute;
@@ -246,6 +252,8 @@ namespace FitMeter
 			for (int m = 0; m <= last; m++)
 			{
 				const DemoMinute& dm = tpl[m];
+				if ((int64_t)c * MINUTES_PER_DAY + m < ctx.sinceMinute)
+					continue; // before the meter's memory starts (its registration)
 				day.mets[m] = dm.mets;
 				day.tag[m] = dm.mets > 0.0f ? dm.tag : 0;
 				day.climb[m] = dm.climb;
@@ -259,9 +267,12 @@ namespace FitMeter
 		{
 			if (dn == today - DAYS && dayStartHour > 0)
 				continue; // only partly covered: its early hours fell before the range
+			if (!steps.count(dn))
+				continue; // nothing since the meter's memory starts
 			day.steps = (int32_t)std::lround(steps[dn]);
 			day.kcal = (int32_t)std::lround(kcal[dn]);
 		}
+		LimitToMeterMemory(out, ctx.sinceMinute, dayStartHour);
 		// with night owl before 3:00, "today" for the totals is still yesterday; the calendar day only has minutes
 		if (dayStartHour > 0 && nowMinute < dayStartHour * 60)
 		{

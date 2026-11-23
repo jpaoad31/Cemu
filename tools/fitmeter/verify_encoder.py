@@ -21,12 +21,17 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 import decoder_harness as H  # noqa: E402
 
-args = [a for a in sys.argv[1:] if not a.startswith('--')]
-night_owl = '--night-owl' in sys.argv
+argv = sys.argv[1:]
+since = None
+if '--since' in argv:
+    k = argv.index('--since'); since = argv[k + 1]; del argv[k:k + 2]
+args = [a for a in argv if not a.startswith('--')]
+night_owl = '--night-owl' in argv
 act_path = args[0] if len(args) > 0 else os.path.join(HERE, 'sample_activity.json')
 when = args[1] if len(args) > 1 else '2026-11-22T14:30'
 out = os.path.join(ROOT, 'build', 'fitmeter_dump')
-subprocess.run([os.path.join(ROOT, 'build', 'fitmeter_test'), '--dump', act_path, when, out] + (['--night-owl'] if night_owl else []),
+subprocess.run([os.path.join(ROOT, 'build', 'fitmeter_test'), '--dump', act_path, when, out] + (['--night-owl'] if night_owl else [])
+               + (['--since', since] if since else []),
                check=True, stdout=subprocess.DEVNULL)
 act_path = os.path.join(out, 'activity_used.json')
 streams = {b: open(os.path.join(out, 'b%d.bin' % b), 'rb').read() for b in (2, 3, 4, 5, 6)}
@@ -158,6 +163,18 @@ for day in sorted(days):
                 check(ok, '%s %02d:%02d altitude %d want %.1f' % (day, k // 60, k % 60, got_level, level))
         checked_minutes += 1
 check(abs(got_level - level) <= 1, 'final altitude %d want %.1f' % (got_level, level))
+# the dates: every day slot the game filled must be a day the source has data for, within today and the
+# meter's memory (its registration), and none after today
+expected_days = {d for d, j in days.items() if 'steps' in j or 'kcal' in j or any(
+    v is not None for v in (j.get('mets') or [])) or any(v not in (None, 0, 0.0) for v in (j.get('climb') or []))}
+first_day = min(expected_days) if expected_days else today
+for d in decoded:
+    # days between the oldest day with data and today are sent (as 0 when the source has none)
+    check(first_day <= d, 'the game filled %s, before the meter has data (%s)' % (d, first_day))
+    check(d <= today, 'the game filled %s, after today' % d)
+    if since:
+        sd = datetime.date.fromisoformat(since.split('T')[0])
+        check(d >= sd - datetime.timedelta(days=1), 'the game filled %s, before the registration %s' % (d, since))
 print('decoded days:', ', '.join('%s:%d' % (k, save.steps[v]) for k, v in sorted(decoded.items())))
 print('%d checks (%d minutes), %d failures; game decoder ran %d instructions' % (checks, checked_minutes, fails, count))
 sys.exit(1 if fails else 0)

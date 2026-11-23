@@ -45,6 +45,7 @@ namespace FitMeter
 		std::map<std::string, std::vector<uint8_t>> blobs;
 		// bookkeeping
 		std::string registeredAt;
+		int64_t historyStartMinute = INT64_MIN; // meter clock, absolute minute: no data before it (registration)
 		std::string lastSync;
 		uint32_t syncCount = 0;
 
@@ -79,6 +80,8 @@ namespace FitMeter
 		std::string ActivityPath() const;
 		bool SaveState();
 		void Unregister();          // the UI's "Reset meter": back to a factory-new meter
+		void ClearHistory();        // the UI's "Clear meter history": no data before now (keeps the registration)
+		int64_t NowMinute() const;  // the meter's clock as an absolute minute
 		void PressButton(uint64_t nowMs); // the UI's button: try to link for the next few seconds
 
 		MeterTime Now() const;      // the meter's clock

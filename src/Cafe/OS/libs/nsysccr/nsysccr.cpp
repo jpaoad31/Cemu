@@ -163,6 +163,11 @@ namespace FitMeterHost
 		s.samuId = st.samuId;
 		s.saveDataId = st.saveDataId;
 		s.registeredAt = st.registeredAt;
+		if (st.registered && st.historyStartMinute != INT64_MIN)
+		{
+			const sint64 hm = st.historyStartMinute % FitMeter::MINUTES_PER_DAY;
+			s.historyStart = fmt::format("{} {:02}:{:02}", FitMeter::FormatDate((sint32)(st.historyStartMinute / FitMeter::MINUTES_PER_DAY)), hm / 60, hm % 60);
+		}
 		s.lastSync = st.lastSync;
 		s.syncCount = st.syncCount;
 		s.clock = m.Now();
@@ -224,6 +229,13 @@ namespace FitMeterHost
 		std::lock_guard lock(Host().mutex);
 		Meter().PressButton(NowMs());
 		LogLine("Fit Meter: button pressed (UI)");
+	}
+
+	void ClearHistory()
+	{
+		std::lock_guard lock(Host().mutex);
+		Meter().ClearHistory();
+		LogLine("Fit Meter: history cleared: no data before now (UI)");
 	}
 
 	void Unregister()

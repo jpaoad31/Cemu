@@ -47,7 +47,7 @@ def s16(v):
     return v - 0x10000 if v & 0x8000 else v
 
 
-def run(streams, now, save=None, trace=False, night_owl=False):
+def run(streams, now, save=None, trace=False, night_owl=False, state=None):
     save = save or SamuSave()
     e = rpxelf.Elf(ELF)
     S = {}
@@ -75,6 +75,7 @@ def run(streams, now, save=None, trace=False, night_owl=False):
 
     stubs = {}
     calls = {}
+    credits = save.__dict__.setdefault('credits', [])
 
     def mk(fn):
         def f(c):
@@ -106,6 +107,9 @@ def run(streams, now, save=None, trace=False, night_owl=False):
     stub('setSAMUComment__19RPHealthSaveManagerFPCwi', lambda c: 0)
     stub('setSAMUTransDate__19RPHealthSaveManagerFUi', lambda c: setattr(save, 'trans', R(c, 4)))
     stub('getSAMUTransDate__19RPHealthSaveManagerCFv', lambda c: save.trans)
+    for nm in ('addFMCUnsettledStep__19RPHealthSaveManagerFUi', 'addFMCUnsettledHeight__19RPHealthSaveManagerFUi',
+               'addFMCUnsettledDistance__19RPHealthSaveManagerFUi'):
+        stub(nm, (lambda n: lambda c: credits.append((n.split('__')[0], R(c, 4))))(nm))
     stub('Alloc__Q3_3jet6memory9AllocatorFUiT1', lambda c: bump(R(c, 4), R(c, 5) or 4))
     stub('Free__Q3_3jet6memory9AllocatorFPv', lambda c: 0)
     for nm in ('getSAMUBaseHeight__19RPHealthSaveManagerCFi',):
@@ -119,7 +123,12 @@ def run(streams, now, save=None, trace=False, night_owl=False):
     stub_classes = ('19RPHealthSaveManager', '17RPHealthParameter', '17RPStepProfileData', '16RPStepSystemData',
                     '12RPHealthBank', '13RPSndAudioMgr', '19RPStepSaveDataMgr', '16RPHealthAreaMgr')
     by_addr = {}
+    # the per-date step records (the Fit Meter Challenge credit compares against them): the game's own code
+    REAL_SAVE = ('OtherMeasure', 'getStep__19RPHealthSaveManager', 'setStep__19RPHealthSaveManager', 'OtherDaySearch',
+                 'DateSub', 'DateAdd')
     for nm, a in S.items():
+        if any(r in nm for r in REAL_SAVE):
+            continue
         if any(cl in nm for cl in stub_classes) and a not in stubs and 0x02000000 <= a < 0x10000000:
             by_addr[a] = nm
 
@@ -194,6 +203,8 @@ def run(streams, now, save=None, trace=False, night_owl=False):
     # singletons: zeroed objects
     savemgr = bump(0x80000)
     param = bump(0x80000)
+    if getattr(save, 'savemgr_mem', None) is not None:
+        mem.write(savemgr, save.savemgr_mem)
     mem.w32(SAVEMGR_PTR, savemgr)
     mem.w32(PARAM_PTR, param)
     if night_owl:
@@ -220,6 +231,7 @@ def run(streams, now, save=None, trace=False, night_owl=False):
         n += 1
     mem.w32(BIN_COUNT, n)
     call('SAMUDataSave__11SAMUProcessFv', proc)
+    save.savemgr_mem = mem.read(savemgr, 0x80000)
     return save, t32, calls, cpu.count, (mem, call, proc)
 
 

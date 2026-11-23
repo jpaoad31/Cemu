@@ -185,6 +185,19 @@ namespace FitMeter
 		h("personal", personal);
 		s("mii_name", miiName);
 		s("registered_at", registeredAt);
+		if (doc.HasMember("history_start") && doc["history_start"].IsString())
+		{
+			int y, mo, d, h, mi;
+			if (std::sscanf(doc["history_start"].GetString(), "%d-%d-%d %d:%d", &y, &mo, &d, &h, &mi) == 5)
+				historyStartMinute = (int64_t)DaysFromCivil(y, mo, d) * MINUTES_PER_DAY + h * 60 + mi;
+		}
+		else if (registered && !registeredAt.empty())
+		{
+			// meter.json from before history_start: the registration time (host clock = meter clock + offset)
+			int y, mo, d, h, mi;
+			if (std::sscanf(registeredAt.c_str(), "%d-%d-%d %d:%d", &y, &mo, &d, &h, &mi) == 5)
+				historyStartMinute = (int64_t)DaysFromCivil(y, mo, d) * MINUTES_PER_DAY + h * 60 + mi + clockOffsetSeconds / 60;
+		}
 		s("last_sync", lastSync);
 		u("sync_count", syncCount);
 		if (doc.HasMember("blobs") && doc["blobs"].IsArray())
@@ -227,6 +240,17 @@ namespace FitMeter
 		doc.AddMember("mii_info", str(ToHex(miiInfo)), al);
 		doc.AddMember("personal", str(ToHex(personal)), al);
 		doc.AddMember("registered_at", str(registeredAt), al);
+		{
+			std::string hs;
+			if (historyStartMinute != INT64_MIN)
+			{
+				char b[32];
+				const int64_t m = historyStartMinute % MINUTES_PER_DAY;
+				std::snprintf(b, sizeof(b), " %02d:%02d", (int)(m / 60), (int)(m % 60));
+				hs = FormatDate((int32_t)(historyStartMinute / MINUTES_PER_DAY)) + b;
+			}
+			doc.AddMember("history_start", str(hs), al);
+		}
 		doc.AddMember("last_sync", str(lastSync), al);
 		doc.AddMember("sync_count", syncCount, al);
 		rapidjson::Value keys(rapidjson::kArrayType);
@@ -279,11 +303,29 @@ namespace FitMeter
 		return t.DayNumber() - (t.hour < m_state.DayStartHour() ? 1 : 0);
 	}
 
+	int64_t VirtualFitMeter::NowMinute() const
+	{
+		const MeterTime t = Now();
+		return (int64_t)t.DayNumber() * MINUTES_PER_DAY + t.hour * 60 + t.minute;
+	}
+
+	void VirtualFitMeter::ClearHistory()
+	{
+		m_state.historyStartMinute = NowMinute();
+		SaveState();
+	}
+
 	bool VirtualFitMeter::GetActivity(Activity& act, std::string& err)
 	{
 		bool ok = true;
+		SourceContext ctx;
+		ctx.now = Now();
+		ctx.dayStartHour = m_state.DayStartHour();
+		// a meter only has data from after its registration
+		ctx.sinceMinute = m_state.registered ? m_state.historyStartMinute : INT64_MIN;
 		if (m_source)
-			ok = m_source->GetActivity(Now(), m_state.DayStartHour(), act, err);
+			ok = m_source->GetActivity(ctx, act, err);
+		LimitToMeterMemory(act, ctx.sinceMinute, ctx.dayStartHour);
 		if (m_state.stepsOverrideDay >= 0 && m_state.stepsOverrideDay == LogicalToday())
 		{
 			DayActivity& d = act.days[m_state.stepsOverrideDay];
@@ -325,6 +367,7 @@ namespace FitMeter
 		m_state.miiName.clear();
 		m_state.personal.clear();
 		m_state.registeredAt.clear();
+		m_state.historyStartMinute = INT64_MIN;
 		m_state.lastSync.clear();
 		m_state.syncCount = 0;
 		for (auto it = m_state.blobs.begin(); it != m_state.blobs.end();)
@@ -623,6 +666,7 @@ namespace FitMeter
 				m_state.identFlag = data[8];
 				m_state.registered = true;
 				m_state.registeredAt = NowString();
+				m_state.historyStartMinute = NowMinute();
 				std::snprintf(b, sizeof(b), "Fit Meter: registered (saveDataId %08X, samuId %08X%s)", m_state.saveDataId, m_state.samuId,
 					m_state.identFlag == 0 ? ", pet" : "");
 				Log(b);

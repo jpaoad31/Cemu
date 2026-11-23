@@ -290,6 +290,39 @@ namespace FitMeter
 
 	// --- encoder ---
 
+	void LimitToMeterMemory(Activity& a, int64_t since, int dayStartHour)
+	{
+		if (since == INT64_MIN)
+			return;
+		const int32_t sinceDay = (int32_t)(since / MINUTES_PER_DAY);
+		const int sinceMin = (int)(since % MINUTES_PER_DAY);
+		// the per-day totals count from the day start: the registration's logical day is the first one
+		const int32_t firstLogical = sinceMin < dayStartHour * 60 ? sinceDay - 1 : sinceDay;
+		for (auto it = a.days.begin(); it != a.days.end();)
+		{
+			DayActivity& d = it->second;
+			if (it->first < firstLogical)
+			{
+				d.steps = d.kcal = -1;
+			}
+			if (it->first <= sinceDay)
+			{
+				const int from = it->first < sinceDay ? MINUTES_PER_DAY : sinceMin; // minutes before since: none
+				for (int m = 0; m < from; m++)
+				{
+					if (!d.mets.empty()) d.mets[m] = NAN;
+					if (!d.altitude.empty()) d.altitude[m] = NAN;
+					if (!d.tag.empty()) d.tag[m] = -1;
+					if (!d.climb.empty()) d.climb[m] = 0.0f;
+				}
+			}
+			if (it->first < firstLogical && it->first < sinceDay)
+				it = a.days.erase(it);
+			else
+				++it;
+		}
+	}
+
 	std::vector<uint8_t> EncodeDayStream(const Activity& a, const MeterTime& now, int dayStartHour, bool isKcal, size_t size)
 	{
 		std::vector<uint8_t> out(size, 0xFF);
@@ -347,7 +380,7 @@ namespace FitMeter
 		}
 		if (start == INT64_MAX || start > nowAbs)
 			return out;
-		const int64_t maxSpan = 50LL * MINUTES_PER_DAY; // the save keeps 50 days
+		const int64_t maxSpan = (int64_t)METER_MINUTE_DAYS * MINUTES_PER_DAY; // a meter's minute memory
 		start = std::max(start, nowAbs - maxSpan + 1);
 		const size_t n = (size_t)(nowAbs - start + 1);
 		// per-minute values in time order (oldest first)

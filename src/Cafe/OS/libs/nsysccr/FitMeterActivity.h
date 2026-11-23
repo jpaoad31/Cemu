@@ -4,6 +4,7 @@
 // turns it into the meter's log streams (SAMU banks 02..06) the way Wii Fit U's decoder
 // (SAMUProcess::SaveU8Data/SaveU16Data) reads them.
 
+#include <climits>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -46,13 +47,21 @@ namespace FitMeter
 		int32_t DayNumber() const { return DaysFromCivil(year, month, day); }
 	};
 
-	// the data source seam: the file, the built-in demo, the phone ("meter sync" message) later.
-	// now: the meter's clock; dayStartHour: 3 with the night-owl setting (per-day totals count from it)
+	// what a source needs to know: the meter's clock, its day start (3 with the night-owl setting: per-day totals
+	// count from it) and where its memory starts (a meter has no data from before it was registered)
+	struct SourceContext
+	{
+		MeterTime now;
+		int dayStartHour = 0;
+		int64_t sinceMinute = INT64_MIN; // absolute minute (day * 1440 + minute of the day), INT64_MIN: no limit
+	};
+
+	// the data source seam: the file, the built-in demo, the phone ("meter sync" message) later
 	class MeterDataSource
 	{
 	public:
 		virtual ~MeterDataSource() = default;
-		virtual bool GetActivity(const MeterTime& now, int dayStartHour, Activity& out, std::string& error) = 0;
+		virtual bool GetActivity(const SourceContext& ctx, Activity& out, std::string& error) = 0;
 		virtual std::string Describe() const = 0;
 	};
 
@@ -70,7 +79,7 @@ namespace FitMeter
 	{
 	public:
 		explicit JsonFileMeterSource(std::string path) : m_path(std::move(path)) {}
-		bool GetActivity(const MeterTime&, int, Activity& out, std::string& error) override { return LoadActivityFile(m_path, out, error); }
+		bool GetActivity(const SourceContext&, Activity& out, std::string& error) override { return LoadActivityFile(m_path, out, error); }
 		std::string Describe() const override { return m_path; }
 		const std::string& GetPath() const { return m_path; }
 	private:
@@ -80,6 +89,10 @@ namespace FitMeter
 	// banks 05 (kcal, isKcal) / 06 (steps): u16 BE per day, index 0 = the meter's today (the day starts at
 	// dayStartHour: Wii Fit U's "night owl" setting moves it to 3:00), FFFF = no more days. size bytes.
 	std::vector<uint8_t> EncodeDayStream(const Activity& a, const MeterTime& now, int dayStartHour, bool isKcal, size_t size);
+	// a real meter keeps 7 days of minutes (the game asks at most 10080 = 7 x 1440 bytes)
+	constexpr int METER_MINUTE_DAYS = 7;
+	// drops what a meter registered at sinceMinute can't have: days before it, minutes before it
+	void LimitToMeterMemory(Activity& a, int64_t sinceMinute, int dayStartHour);
 	// banks 02 (METs) / 03 (altitude) / 04 (tag): one byte per minute, index 0 = the current minute, going back;
 	// "n 00" = n minutes of 0; FF = padding. size bytes (the game asks 10080 = 7 days, or less). The three
 	// streams start at the same minute: the first one with any per-minute value.

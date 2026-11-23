@@ -7,7 +7,7 @@
 //     $D/VirtualFitMeter.cpp $D/FitMeterActivity.cpp $D/FitMeterDemo.cpp -o build/fitmeter_test && build/fitmeter_test
 //
 // Dump mode (for tools/fitmeter/decoder_harness.py, which runs the game's own decoder on the streams):
-//   build/fitmeter_test --dump activity.json|demo 2026-11-22T14:30 outdir/ [--night-owl]
+//   build/fitmeter_test --dump activity.json|demo 2026-11-22T14:30 outdir/ [--night-owl] [--since 2026-11-20T08:00] [--minute-bytes N]
 // writes outdir/b2.bin .. b6.bin: what the meter sends for banks 02..06 (XOR undone), through the whole link,
 // and outdir/activity_used.json: the source's data the streams were made from.
 
@@ -17,6 +17,7 @@
 #include "FitMeterProtocol.h"
 #include "VirtualFitMeter.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -426,10 +427,12 @@ static void TestLinkAndMeter(const fs::path& dir)
 	{
 		std::ofstream f(dir / "activity.json");
 		f << R"({ "days": [ { "date": "2026-11-22", "steps": 4321, "kcal": 99,
-			"segments": [ { "start": "15:00", "minutes": 10, "mets": 4.0, "tag": 3, "climb_m": 20 } ] },
+			"segments": [ { "start": "16:00", "minutes": 10, "mets": 4.0, "tag": 3, "climb_m": 20 } ] },
 			{ "date": "2026-11-21", "steps": 10000 } ] })";
 	}
 	CHECK(meter->State().source == "demo"); // the default
+	// the meter's memory starts at its registration (the ident write at meter time 15:45)
+	CHECK_EQ(meter->State().historyStartMinute, (int64_t)DaysFromCivil(2026, 11, 22) * 1440 + 15 * 60 + 45);
 	meter->State().source = "file";
 	meter->UseSourceFromState();
 	wall += 3600; // an hour later: meter 16:45, console 16:45
@@ -447,12 +450,12 @@ static void TestLinkAndMeter(const fs::path& dir)
 	c.Disconnect();
 	CHECK_EQ(b6.size(), (size_t)120);
 	CHECK_EQ((b6[0] << 8) | b6[1], 4321);
-	CHECK_EQ((b6[2] << 8) | b6[3], 10000);
+	CHECK_EQ((b6[2] << 8) | b6[3], 0xFFFF); // 11-21: before the meter was registered (11-22 15:45)
 	CHECK_EQ((b5[0] << 8) | b5[1], 99);
-	// METs: 16:45 back to 15:10 = 96 minutes of 0, then 10 x 40 (15:09..15:00)
-	CHECK(std::vector<uint8_t>(b2.begin(), b2.begin() + 12) == std::vector<uint8_t>({96, 0, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40}));
+	// METs: 16:45 back to 16:10 = 36 minutes of 0, then 10 x 40 (16:09..16:00); nothing before 15:45 (registration)
+	CHECK(std::vector<uint8_t>(b2.begin(), b2.begin() + 12) == std::vector<uint8_t>({36, 0, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40}));
 	CHECK_EQ(b2[12], 0xFF);
-	CHECK(std::vector<uint8_t>(b3.begin(), b3.begin() + 12) == std::vector<uint8_t>({96, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}));
+	CHECK(std::vector<uint8_t>(b3.begin(), b3.begin() + 12) == std::vector<uint8_t>({36, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}));
 	CHECK_EQ(b4[2], 3);
 	CHECK(!meter->State().lastSync.empty());
 	CHECK_EQ(meter->State().syncCount, 1u);
@@ -520,9 +523,15 @@ static void TestDemo()
 
 	DemoMeterSource src;
 	std::string err;
+	auto ctxOf = [](const MeterTime& now, int dayStart) {
+		SourceContext c;
+		c.now = now;
+		c.dayStartHour = dayStart;
+		return c;
+	};
 	auto steps = [&](const MeterTime& now, int dayStart, int32_t day) {
 		Activity a;
-		src.GetActivity(now, dayStart, a, err);
+		src.GetActivity(ctxOf(now, dayStart), a, err);
 		auto it = a.days.find(day);
 		return it == a.days.end() ? -2 : it->second.steps;
 	};
@@ -543,8 +552,8 @@ static void TestDemo()
 	CHECK_EQ(steps(TimeOf(d, 23, 59), 0, d), steps(TimeOf(d + 1, 10, 0), 0, d));
 	CHECK_EQ(steps(TimeOf(d + 1, 10, 0), 0, d), steps(TimeOf(d + 1, 10, 0), 0, d));
 	Activity a1, a2;
-	src.GetActivity(TimeOf(d + 1, 10, 0), 0, a1, err);
-	src.GetActivity(TimeOf(d + 5, 9, 30), 0, a2, err);
+	src.GetActivity(ctxOf(TimeOf(d + 1, 10, 0), 0), a1, err);
+	src.GetActivity(ctxOf(TimeOf(d + 5, 9, 30), 0), a2, err);
 	CHECK(a1.days.at(d).mets.size() == 1440 && a2.days.at(d).mets.size() == 1440);
 	bool same = true;
 	for (int m = 0; m < 1440; m++)
@@ -555,7 +564,7 @@ static void TestDemo()
 	const int s0730 = steps(TimeOf(wd, 7, 30), 0, wd), s0800 = steps(TimeOf(wd, 8, 0), 0, wd), s2359 = steps(TimeOf(wd, 23, 59), 0, wd);
 	CHECK(s0730 < s0800 && s0800 < s2359);
 	Activity p;
-	src.GetActivity(TimeOf(wd, 8, 0), 0, p, err);
+	src.GetActivity(ctxOf(TimeOf(wd, 8, 0), 0), p, err);
 	CHECK(!std::isnan(p.days.at(wd).mets[480]) && std::isnan(p.days.at(wd).mets[481]));
 	CHECK(p.days.find(wd + 1) == p.days.end());
 	// night owl: a Saturday with a walk home at 00:25 (template 5): its 00:00-02:59 steps count for Friday
@@ -573,7 +582,7 @@ static void TestDemo()
 	// at 01:30 on Saturday with night owl, the per-day stream's "today" is Friday, including the walk so far
 	Activity n;
 	const MeterTime t0130 = TimeOf(sat, 1, 30);
-	src.GetActivity(t0130, 3, n, err);
+	src.GetActivity(ctxOf(t0130, 3), n, err);
 	auto day = EncodeDayStream(n, t0130, 3, false, 120);
 	int friSoFar = 0;
 	for (int m = 180; m < 1440; m++)
@@ -584,7 +593,7 @@ static void TestDemo()
 	CHECK_EQ(n.days.at(sat).steps, -1); // the calendar day only carries minutes
 	// kcal follows the METs
 	Activity k;
-	src.GetActivity(TimeOf(mon + 2, 12, 0), 0, k, err);
+	src.GetActivity(ctxOf(TimeOf(mon + 2, 12, 0), 0), k, err);
 	CHECK(k.days.at(mon + 1).kcal > 150 && k.days.at(mon + 1).kcal < 900);
 	// the steps-today override (any source) lives in the meter
 	const fs::path dir = fs::temp_directory_path() / "fitmeter_demo_test";
@@ -610,7 +619,84 @@ static void TestDemo()
 	CHECK(o.days.at(vm.LogicalToday() - 1).steps != 12345);
 }
 
-static int Dump(const char* activityPath, const char* when, const char* outDir, bool nightOwl)
+
+// a meter only has data from after its registration, and keeps 7 days of minutes
+static void TestHistory()
+{
+	const fs::path dir = fs::temp_directory_path() / "fitmeter_history_test";
+	fs::remove_all(dir);
+	int64_t wall = LocalEpoch(2026, 11, 23, 0, 48);
+	VirtualFitMeter vm(dir.string());
+	vm.SetWallClock([&] { return wall; });
+	std::string err;
+	Activity a;
+	// unregistered: the demo has its whole range (the UI shows it); registered at 00:48: only since then
+	vm.GetActivity(a, err);
+	CHECK(a.days.size() > 40);
+	vm.HandleWrite(SAMU_WRITE_IDENT, 0, {1, 2, 3, 4, 5, 6, 7, 8, 0xFF});
+	CHECK(vm.State().registered);
+	const int32_t today = DaysFromCivil(2026, 11, 23);
+	auto daySum = [](const std::vector<uint8_t>& b) {
+		int n = 0, sum = 0;
+		for (size_t i = 0; i + 1 < b.size(); i += 2)
+		{
+			const int v = (b[i] << 8) | b[i + 1];
+			if (v == 0xFFFF)
+				break;
+			n++;
+			sum += v;
+		}
+		return std::make_pair(n, sum);
+	};
+	auto steps = *vm.HandleRead(SAMU_READ_STEPS, 120);
+	auto [n0, s0] = daySum(steps);
+	CHECK_EQ(n0, 1);  // only today
+	CHECK_EQ(s0, 0);  // nothing walked since 00:48 yet
+	CHECK(vm.HandleRead(SAMU_READ_METS, 10080)->at(0) == 1); // "1 00": the current minute only
+	// a minute later: still only the minutes since registration
+	wall += 60;
+	auto m2 = *vm.HandleRead(SAMU_READ_METS, 10080);
+	CHECK(m2[0] == 2 && m2[1] == 0 && m2[2] == 0xFF);
+	// the next day at noon: two days, today's partial, yesterday's from 00:48
+	wall = LocalEpoch(2026, 11, 24, 12, 0);
+	steps = *vm.HandleRead(SAMU_READ_STEPS, 120);
+	auto [n1, s1] = daySum(steps);
+	CHECK_EQ(n1, 2);
+	int fromReg = 0;
+	for (int m = 48; m < 1440; m++)
+		fromReg += DemoTemplateDay(DemoTemplateIndex(today)).at(m).steps;
+	CHECK_EQ((steps[2] << 8) | steps[3], fromReg);
+	// two weeks later: daily totals since registration (15 days), minutes for 7 days at most
+	wall = LocalEpoch(2026, 12, 7, 12, 0);
+	auto [n2, s2] = daySum(*vm.HandleRead(SAMU_READ_STEPS, 120));
+	CHECK_EQ(n2, 15);
+	auto mets = *vm.HandleRead(SAMU_READ_METS, 10080);
+	int covered = 0;
+	for (size_t i = 0; i < mets.size() && mets[i] != 0xFF;)
+	{
+		if (i + 1 < mets.size() && mets[i + 1] == 0) { covered += mets[i]; i += 2; }
+		else { covered++; i++; }
+	}
+	CHECK_EQ(covered, 7 * 1440);
+	// "clear meter history": nothing before now, the registration stays
+	vm.ClearHistory();
+	auto [n3, s3] = daySum(*vm.HandleRead(SAMU_READ_STEPS, 120));
+	CHECK_EQ(n3, 1);
+	CHECK_EQ(s3, 0);
+	CHECK(vm.State().registered);
+	// it persists
+	VirtualFitMeter again(dir.string());
+	CHECK_EQ(again.State().historyStartMinute, vm.State().historyStartMinute);
+	// a meter.json from before history_start: the registration time is the start
+	{
+		std::ofstream f(dir / "meter.json");
+		f << R"({ "registered": true, "registered_at": "2026-11-23 00:48:03", "clock_offset_s": 0, "save_data_id": 1, "samu_id": 2 })";
+	}
+	VirtualFitMeter old(dir.string());
+	CHECK_EQ(old.State().historyStartMinute, (int64_t)today * 1440 + 48);
+}
+
+static int Dump(const char* activityPath, const char* when, const char* outDir, bool nightOwl, const char* since, size_t minuteBytes)
 {
 	int y, mo, d, h, mi;
 	if (std::sscanf(when, "%d-%d-%dT%d:%d", &y, &mo, &d, &h, &mi) != 5)
@@ -630,6 +716,15 @@ static int Dump(const char* activityPath, const char* when, const char* outDir, 
 		meter.SetDataSource(std::make_shared<JsonFileMeterSource>(activityPath));
 	if (nightOwl)
 		meter.State().personal = {40, 1, 44, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 200};
+	meter.State().registered = true;
+	meter.State().clockSet = true;
+	if (since)
+	{
+		int sy, smo, sd, sh, smi;
+		if (std::sscanf(since, "%d-%d-%dT%d:%d", &sy, &smo, &sd, &sh, &smi) == 5)
+			meter.State().historyStartMinute = (int64_t)DaysFromCivil(sy, smo, sd) * 1440 + sh * 60 + smi;
+	}
+	meter.State().autoPressDelayMs = 0;
 	{
 		// what the source gave, as activity.json (the verifier's reference)
 		Activity act;
@@ -638,9 +733,6 @@ static int Dump(const char* activityPath, const char* when, const char* outDir, 
 		std::ofstream f(fs::path(outDir) / "activity_used.json");
 		f << ActivityToJson(act);
 	}
-	meter.State().registered = true;
-	meter.State().clockSet = true;
-	meter.State().autoPressDelayMs = 0;
 	DrcIrLink link;
 	link.SetPeer(&meter);
 	Console c{link, now};
@@ -649,7 +741,8 @@ static int Dump(const char* activityPath, const char* when, const char* outDir, 
 		std::printf("connect failed\n");
 		return 1;
 	}
-	const struct { uint8_t bank; size_t size; } banks[] = {{2, 10080}, {3, 10080}, {4, 10080}, {5, 120}, {6, 120}};
+	// the game asks banks 02-04 for min(10080, minutes since the last transfer + 10) bytes
+	const struct { uint8_t bank; size_t size; } banks[] = {{2, minuteBytes}, {3, minuteBytes}, {4, minuteBytes}, {5, 120}, {6, 120}};
 	for (const auto& b : banks)
 	{
 		std::vector<uint8_t> data;
@@ -668,13 +761,31 @@ static int Dump(const char* activityPath, const char* when, const char* outDir, 
 
 int main(int argc, char** argv)
 {
-	if ((argc == 5 || argc == 6) && std::strcmp(argv[1], "--dump") == 0)
-		return Dump(argv[2], argv[3], argv[4], argc == 6 && std::strcmp(argv[5], "--night-owl") == 0);
+	if (argc >= 5 && std::strcmp(argv[1], "--dump") == 0)
+	{
+		bool nightOwl = false;
+		const char* since = nullptr;
+		size_t minuteBytes = 10080;
+		for (int i = 5; i < argc; i++)
+		{
+			if (std::strcmp(argv[i], "--minute-bytes") == 0 && i + 1 < argc)
+			{
+				minuteBytes = (size_t)std::clamp(std::atoi(argv[++i]), 1, 10080);
+				continue;
+			}
+			if (std::strcmp(argv[i], "--night-owl") == 0)
+				nightOwl = true;
+			else if (std::strcmp(argv[i], "--since") == 0 && i + 1 < argc)
+				since = argv[++i];
+		}
+		return Dump(argv[2], argv[3], argv[4], nightOwl, since, minuteBytes);
+	}
 	setenv("TZ", "UTC", 1);
 	tzset();
 	TestFrames();
 	TestEncoder();
 	TestDemo();
+	TestHistory();
 	TestLinkAndMeter(fs::temp_directory_path() / "fitmeter_test");
 	std::printf("%d checks, %d failures\n", g_checks, g_failures);
 	return g_failures ? 1 : 0;
