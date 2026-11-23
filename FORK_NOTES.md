@@ -242,6 +242,16 @@ device pointer when a device drops out (9ea9be7).
   the others' bindings (logged, red note in the tab); bindings version 3. Fixes the mix-ups: a Wii Remote
   silently on the Balance Board, the mouse tilting the GamePad while the phone sent motion.
 
+- **Virtual Wii Fit Meter** (branch `fit-meter`, committed, not yet tested in the game; see `FIT_METER.md`): HLE of
+  `nsysccr.CCRCDCPerIrdaControl` + `vpadbase.VPADBASEIsInit/GetIRCStatus/ClearIRCEvent` (the GamePad's IR port,
+  `DrcIrLink`) with a virtual meter on the link (`VirtualFitMeter`: IRCU slave + SAMU, XOR 0xAA). Registration
+  (ident, time, LCD data, Mii icons/info, personal data) and the game's initialize are kept in
+  `<user data>/fitmeter/` (meter.json + blobs/); syncs send steps/kcal per day and optional per-minute METs,
+  altitude and tag from `fitmeter/activity.json`. Tools > Virtual Fit Meter; log type "Fit Meter / IR".
+  The encoder is checked against the game's own decoder (`tools/fitmeter/verify_encoder.py`, runs
+  SAMUProcess::SAMUDataSave from step.elf); standalone tests in `src/Cafe/OS/libs/nsysccr/FitMeterTest.cpp`.
+  The data source is an interface (`MeterDataSource`) for phase (b), the iPhone app.
+
 ## Upstream (Cemu's AI policy)
 
 Cemu's CONTRIBUTING.md (checked 2026-10-22): code from new contributors must be written and understood by a
@@ -261,7 +271,7 @@ publishing.
 
 ## Backlog (later)
 
-- **PRIORITY: Wii Fit Meter (the user's favourite games, the step and altitude ones, need it).**
+- **PRIORITY: Wii Fit Meter (the user's favourite games, the step and altitude ones, need it).** Step 1-3 (virtual meter, file data) done on `fit-meter`; next: the phone as the source, then the real meter.
   - How it connects: IrDA over the GamePad's IR port. The game imports `nsysccr` (`CCRCDCPerIrdaControl`)
     and has its own wrappers `__CCRCDCIRCConnect`/`Disconnect`/`Send`/`Receive`. Its meter code is "SAMU",
     fully named in the symbols: `SAMUProcess`, `SAMUMiiIcon`, `CreateSAMULCDTexture`,

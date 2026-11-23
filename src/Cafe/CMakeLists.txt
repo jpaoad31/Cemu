@@ -373,6 +373,18 @@ add_library(CemuCafe
   OS/libs/nn_boss/nn_boss.h
   OS/libs/nn_ccr/nn_ccr.cpp
   OS/libs/nn_ccr/nn_ccr.h
+  OS/libs/nsysccr/DrcIrLink.cpp
+  OS/libs/nsysccr/DrcIrLink.h
+  OS/libs/nsysccr/FitMeterActivity.cpp
+  OS/libs/nsysccr/FitMeterActivity.h
+  OS/libs/nsysccr/FitMeterDemo.cpp
+  OS/libs/nsysccr/FitMeterDemo.h
+  OS/libs/nsysccr/FitMeterProtocol.cpp
+  OS/libs/nsysccr/FitMeterProtocol.h
+  OS/libs/nsysccr/nsysccr.cpp
+  OS/libs/nsysccr/nsysccr.h
+  OS/libs/nsysccr/VirtualFitMeter.cpp
+  OS/libs/nsysccr/VirtualFitMeter.h
   OS/libs/nn_cmpt/nn_cmpt.cpp
   OS/libs/nn_cmpt/nn_cmpt.h
   OS/libs/nn_client_service.h
@@ -653,6 +665,8 @@ if (ENABLE_LIBUSB)
 endif()
 
 target_include_directories(CemuCafe PUBLIC "../")
+# the virtual Fit Meter (OS/libs/nsysccr) reads/writes its JSON files with rapidjson
+target_include_directories(CemuCafe PRIVATE ${RAPIDJSON_INCLUDE_DIRS})
 
 if (glslang_VERSION VERSION_LESS "15.0.0")
 	set(glslang_target "glslang::SPIRV")
