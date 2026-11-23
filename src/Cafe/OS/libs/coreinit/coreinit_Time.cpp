@@ -73,14 +73,19 @@ namespace coreinit
 
 	uint64 OSCalendarTimeToTicks(OSCalendarTime_t *calendar)
 	{
-		uint32 year = calendar->year;
+		// out-of-range fields are normalised (the months into the year, the days past the month linearly): Wii Fit U's
+		// calendar code (RPSysCalendar) steps back from January with month -1 and forward with day 31 of a 30-day
+		// month. The month used to be taken modulo 12 as unsigned, so month -1 became April.
+		sint32 month = calendar->month;
+		sint32 year = calendar->year + (month >= 0 ? month / 12 : -((11 - month) / 12));
+		month -= (year - (sint32)calendar->year) * 12;
 
-		uint32 leapDays = getLeapDaysUntilYear(year);
-		uint32 startDayOfCurrentMonth = getDayInYearByYearAndMonth(year, calendar->month);
+		uint32 leapDays = getLeapDaysUntilYear((uint32)year);
+		uint32 startDayOfCurrentMonth = getDayInYearByYearAndMonth((uint32)year, (uint32)month);
 
-		uint64 dayInYear = (startDayOfCurrentMonth + calendar->dayOfMonth) - 1;
-		
-		uint64 dayCount = dayInYear + year * 365 + leapDays - DAY_BIAS_2000;
+		sint64 dayInYear = (sint64)startDayOfCurrentMonth + (sint32)calendar->dayOfMonth - 1;
+
+		uint64 dayCount = (uint64)(dayInYear + (sint64)year * 365 + leapDays - (sint64)DAY_BIAS_2000);
 
 		// convert date to seconds
 		uint64 tSeconds = 0;
